@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 font-sans">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-2xl p-5 shadow-sm max-w-6xl mx-auto">
+    <!-- Header -->
+    <div class="flex items-center justify-between pb-4 mb-5 border-b border-[var(--border)]">
+      <div>
+        <h2 class="text-xl font-bold tracking-tight text-[var(--foreground)] flex items-center gap-2">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          Attendify Mobile Attendance Lifecycle
+        </h2>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          Dual-Factor Verification: Bluetooth Low Energy Token + 20,000 Hz Acoustic Presence Radar
+        </p>
+      </div>
+      <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20">
+        &plusmn;500 Hz Error Tolerance
+      </span>
+    </div>
+
+    <!-- 5-Stage Sequence Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-3 relative">
+      
+      <!-- Stage 1 -->
+      <div class="flex flex-col justify-between p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:border-cyan-500/50 transition duration-150">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="w-7 h-7 rounded-lg bg-cyan-500/10 text-cyan-500 font-bold text-xs flex items-center justify-center border border-cyan-500/20">
+              01
+            </span>
+            <span class="text-[11px] font-semibold text-cyan-500 uppercase tracking-wider">Teacher</span>
+          </div>
+          <h3 class="font-semibold text-sm mb-1.5">Dual Broadcast</h3>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Teacher device hosts dynamic GATT service and emits continuous 20,000 Hz sine wave tone.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--muted-foreground)]">
+          <span class="font-mono text-cyan-600 dark:text-cyan-400">BLE + 20 kHz Tone</span>
+        </div>
+      </div>
+
+      <!-- Stage 2 -->
+      <div class="flex flex-col justify-between p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:border-emerald-500/50 transition duration-150">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-500 font-bold text-xs flex items-center justify-center border border-emerald-500/20">
+              02
+            </span>
+            <span class="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider">Physics</span>
+          </div>
+          <h3 class="font-semibold text-sm mb-1.5">Acoustic Shield</h3>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Ultrasound reflects inside room but is physically stopped by drywall, glass, and closed doors.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--muted-foreground)]">
+          <span class="text-amber-500 font-medium">Blocks Hallway Proxies</span>
+        </div>
+      </div>
+
+      <!-- Stage 3 -->
+      <div class="flex flex-col justify-between p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:border-purple-500/50 transition duration-150">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-500 font-bold text-xs flex items-center justify-center border border-purple-500/20">
+              03
+            </span>
+            <span class="text-[11px] font-semibold text-purple-500 uppercase tracking-wider">Student</span>
+          </div>
+          <h3 class="font-semibold text-sm mb-1.5">Dual Reception</h3>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Scans GATT characteristic while 4096-pt FFT checks 19,500 – 20,500 Hz for SNR &ge; 1.30.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--muted-foreground)]">
+          <span class="font-mono text-purple-500">&plusmn;500 Hz Window</span>
+        </div>
+      </div>
+
+      <!-- Stage 4 -->
+      <div class="flex flex-col justify-between p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:border-blue-500/50 transition duration-150">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-500 font-bold text-xs flex items-center justify-center border border-blue-500/20">
+              04
+            </span>
+            <span class="text-[11px] font-semibold text-blue-500 uppercase tracking-wider">Lock</span>
+          </div>
+          <h3 class="font-semibold text-sm mb-1.5">2-Factor Validation</h3>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Both BLE token lock AND in-room ultrasonic proof must pass before submission is authorized.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--muted-foreground)]">
+          <span class="text-blue-500 font-medium">BLE &amp; Audio Match</span>
+        </div>
+      </div>
+
+      <!-- Stage 5 -->
+      <div class="flex flex-col justify-between p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:border-emerald-500/50 transition duration-150">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-500 font-bold text-xs flex items-center justify-center border border-emerald-500/20">
+              05
+            </span>
+            <span class="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider">Cloud</span>
+          </div>
+          <h3 class="font-semibold text-sm mb-1.5">Sync &amp; Live Roster</h3>
+          <p class="text-xs text-[var(--muted-foreground)] leading-relaxed">
+            Payload submitted via HTTPS to Render backend; logged in database and updated on teacher UI.
+          </p>
+        </div>
+        <div class="mt-4 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--muted-foreground)]">
+          <span class="text-emerald-500 font-medium">Real-Time Attendance</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "Attendify",
+    "slug": "attendify",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "attendify",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      [
+        "react-native-bluetooth-ble",
+        {
+          "androidBluetoothPermissions": [
+            "scan",
+            "connect",
+            "advertise"
+          ]
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.example.attendify",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "com.example.attendify",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "Attendify uses Bluetooth to detect nearby classroom attendance sessions.",
+        "NSBluetoothPeripheralUsageDescription": "Attendify uses Bluetooth to advertise an active classroom attendance session.",
+        "NSMicrophoneUsageDescription": "Attendify uses the microphone to detect ultrasonic acoustic signals for classroom presence verification."
+      }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "eae6e6e3-8666-4f8b-81d4-87123158b398"
+      }
+    }
+  }
+}
