@@ -214,7 +214,7 @@ export function buildRadarHtml(
           osc.frequency.setValueAtTime(frequency, now);
 
           gain.gain.setValueAtTime(0.0001, now);
-          gain.gain.linearRampToValueAtTime(0.75, now + 0.05);
+          gain.gain.linearRampToValueAtTime(0.35, now + 0.05);
 
           osc.connect(gain);
           gain.connect(audioCtx.destination);
@@ -232,8 +232,8 @@ export function buildRadarHtml(
           audioElem.autoplay = true;
           document.body.appendChild(audioElem);
         }
-        audioElem.src = "${generateUltrasoundWavDataUri(targetFreq, 48000, 1.0, 0.85)}";
-        audioElem.volume = 1.0;
+        audioElem.src = "${generateUltrasoundWavDataUri(targetFreq, 48000, 1.0, 0.30)}";
+        audioElem.volume = 0.35;
         audioElem.play().catch(function(e) {
           console.warn("[EMITTER] audioElem play error:", e);
         });

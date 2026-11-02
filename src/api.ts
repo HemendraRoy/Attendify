@@ -118,6 +118,27 @@ export const api = {
 
   history: () =>
     request<{ attendance: AttendanceHistory[] }>('/attendance/student/history'),
+
+  classAttendanceHistory: (classId: string) =>
+    request<{ sessions: ClassSessionHistory[] }>(`/attendance/classes/${classId}/history`),
+};
+
+export type ClassSessionStudentRecord = {
+  studentId: string;
+  name: string;
+  email: string;
+  status: 'PRESENT' | 'ABSENT';
+  markedAt?: string | null;
+};
+
+export type ClassSessionHistory = {
+  id: string;
+  createdAt: string;
+  endedAt: string | null;
+  expiresAt: string;
+  presentCount: number;
+  totalEnrolled: number;
+  records: ClassSessionStudentRecord[];
 };
 
 export type User = {
