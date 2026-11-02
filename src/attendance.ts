@@ -43,7 +43,7 @@ export async function verifyAndMarkAttendance(
 
     onProgress?.({
       stage: 'SCANNING_BLE',
-      message: 'Scanning for active teacher BLE beacon & classroom acoustic radar...',
+      message: 'Scanning for active teacher beacon & proximity radar...',
       candidatesCount: 0
     });
 
@@ -92,7 +92,7 @@ export async function verifyAndMarkAttendance(
           bleTokenFound: true,
           ultrasoundVerified: false,
           ultrasoundDetails: ultraResult,
-          message: 'Teacher BLE detected, but 20 kHz classroom ultrasound was not heard. You must be physically inside the room.'
+          message: 'Teacher beacon detected, but classroom proximity sound was not heard. You must be physically inside the room.'
         });
       } else {
         const failureReason = totalBleScanned === 0
@@ -133,7 +133,7 @@ export async function verifyAndMarkAttendance(
           // Wait for classroom ultrasound presence result
           onProgress?.({
             stage: 'VERIFYING_ULTRASOUND',
-            message: 'Analyzing 20 kHz acoustic spectrum for physical room presence…',
+            message: 'Verifying acoustic proximity for physical room presence…',
             bleFound: true,
             candidatesCount: candidates > 0 ? candidates : 1
           });
@@ -153,14 +153,14 @@ export async function verifyAndMarkAttendance(
               bleTokenFound: true,
               ultrasoundVerified: false,
               ultrasoundDetails: ultraResult,
-              message: 'Proxy Prevention Alert: Active class session located, but 20,000 Hz ultrasound acoustic presence was not detected. You must be physically inside the classroom.'
+              message: 'Proxy Prevention Alert: Active class session located, but classroom acoustic presence was not detected. You must be physically inside the classroom.'
             });
             return;
           }
 
           onProgress?.({
             stage: 'ULTRASOUND_VERIFIED',
-            message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB, 20 kHz). Submitting attendance…`,
+            message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB). Submitting attendance…`,
             bleFound: true,
             ultrasoundVerified: true,
             candidatesCount: candidates > 0 ? candidates : 1
@@ -184,7 +184,7 @@ export async function verifyAndMarkAttendance(
               bleTokenFound: true,
               ultrasoundVerified: true,
               ultrasoundDetails: ultraResult,
-              message: 'Attendance verified and marked successfully via Active Session + 20 kHz Ultrasound!'
+              message: 'Attendance verified and marked successfully via Active Session + Ultrasound Proximity!'
             });
           } catch (err: any) {
             console.warn('[ATTENDANCE] Submission error with fallback:', err?.message);
@@ -223,7 +223,7 @@ export async function verifyAndMarkAttendance(
             // Wait for classroom ultrasound presence result
             onProgress?.({
               stage: 'VERIFYING_ULTRASOUND',
-              message: 'Analyzing 20 kHz acoustic spectrum for physical room presence...',
+              message: 'Verifying acoustic proximity for physical room presence...',
               bleFound: true,
               candidatesCount: candidates
             });
@@ -243,14 +243,14 @@ export async function verifyAndMarkAttendance(
                 bleTokenFound: true,
                 ultrasoundVerified: false,
                 ultrasoundDetails: ultraResult,
-                message: 'Proxy Prevention Alert: Bluetooth signal detected through walls, but 20,000 Hz ultrasound acoustic presence was not detected. You must be inside the classroom.'
+                message: 'Proxy Prevention Alert: Bluetooth signal detected through walls, but classroom acoustic presence was not detected. You must be inside the classroom.'
               });
               return;
             }
 
             onProgress?.({
               stage: 'ULTRASOUND_VERIFIED',
-              message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB, 20 kHz). Submitting attendance...`,
+              message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB). Submitting attendance...`,
               bleFound: true,
               ultrasoundVerified: true,
               candidatesCount: candidates
@@ -274,7 +274,7 @@ export async function verifyAndMarkAttendance(
                 bleTokenFound: true,
                 ultrasoundVerified: true,
                 ultrasoundDetails: ultraResult,
-                message: 'Attendance verified and marked successfully via BLE + 20 kHz Ultrasound!'
+                message: 'Attendance verified and marked successfully via BLE + Ultrasound Proximity!'
               });
             } catch (err: any) {
               console.warn('[ATTENDANCE] Submission error:', err?.message);

@@ -80,7 +80,7 @@ export default function TeacherClass() {
       if (!bleStarted) {
         Alert.alert(
           'Bluetooth Beacon Notice',
-          'Bluetooth advertising is not supported or active on this device. Attendance will operate smoothly using the 20 kHz Ultrasonic presence radar and class session code!'
+          'Bluetooth advertising is not supported or active on this device. Attendance will operate smoothly using classroom proximity radar!'
         );
       }
     } catch (e) {
@@ -160,7 +160,7 @@ export default function TeacherClass() {
                 <Text style={s.codeLabel}>IN-CLASS ATTENDANCE CODE</Text>
                 <Text style={s.codeValue}>{sessionCode}</Text>
                 <Text style={s.codeHelp}>
-                  Broadcasting as ATT-{sessionCode} & 20 kHz Acoustic Radar. Students can auto-scan or type this code.
+                  Broadcasting as ATT-{sessionCode} & Classroom Proximity Radar.
                 </Text>
               </View>
             )}
@@ -180,7 +180,7 @@ export default function TeacherClass() {
               <View style={[s.badge, s.badgeUltrasound]}>
                 <Text style={s.badgeDot}>🔊</Text>
                 <Text style={s.badgeText}>
-                  Ultrasound: {DEFAULT_ULTRASOUND.frequency} Hz (Inaudible Room Radar)
+                  Proximity Radar: Inaudible Acoustic Carrier Active
                 </Text>
               </View>
             </View>
