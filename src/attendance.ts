@@ -147,13 +147,18 @@ export async function verifyAndMarkAttendance(
 
           if (!ultraResult.verified) {
             console.warn('[ATTENDANCE] Fallback session acquired, but Ultrasound room check failed:', ultraResult.reason);
+            const failMsg = ultraResult.reason === 'MIC_PERMISSION_DENIED'
+              ? `Microphone Access Error: ${ultraResult.details || 'Permission denied'}. Please check microphone permissions in phone Settings.`
+              : ultraResult.reason === 'NOT_SUPPORTED'
+              ? `Acoustic Input Error: ${ultraResult.details || 'Microphone unavailable'}. Tap "Test Microphone" to diagnose.`
+              : 'Proxy Prevention Alert: Active class session located, but classroom acoustic presence was not detected after 12s. Ensure teacher started attendance with sound playing.';
             finish({
               marked: false,
               candidates,
               bleTokenFound: true,
               ultrasoundVerified: false,
               ultrasoundDetails: ultraResult,
-              message: 'Proxy Prevention Alert: Active class session located, but classroom acoustic presence was not detected. You must be physically inside the classroom.'
+              message: failMsg
             });
             return;
           }
@@ -237,13 +242,18 @@ export async function verifyAndMarkAttendance(
 
             if (!ultraResult.verified) {
               console.warn('[ATTENDANCE] BLE token acquired, but Ultrasound room check failed:', ultraResult.reason);
+              const failMsg = ultraResult.reason === 'MIC_PERMISSION_DENIED'
+                ? `Microphone Access Error: ${ultraResult.details || 'Permission denied'}. Please check microphone permissions in phone Settings.`
+                : ultraResult.reason === 'NOT_SUPPORTED'
+                ? `Acoustic Input Error: ${ultraResult.details || 'Microphone unavailable'}. Tap "Test Microphone" to diagnose.`
+                : 'Proxy Prevention Alert: Bluetooth signal detected through walls, but classroom acoustic presence was not detected after 12s. You must be inside the classroom.';
               finish({
                 marked: false,
                 candidates,
                 bleTokenFound: true,
                 ultrasoundVerified: false,
                 ultrasoundDetails: ultraResult,
-                message: 'Proxy Prevention Alert: Bluetooth signal detected through walls, but classroom acoustic presence was not detected. You must be inside the classroom.'
+                message: failMsg
               });
               return;
             }

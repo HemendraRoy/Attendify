@@ -15,8 +15,15 @@ export default function StudentClass() {
   const [statusMessage, setStatusMessage] = useState('');
   const [bleDetected, setBleDetected] = useState(false);
   const [ultrasoundVerified, setUltrasoundVerified] = useState(false);
-  const [liveTelemetry, setLiveTelemetry] = useState<{ frequency: number; power: number; snr: number } | null>(null);
+  const [liveTelemetry, setLiveTelemetry] = useState<{ frequency: number; power: number; snr: number; micLevel?: number } | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+
+  // Microphone Diagnostic Test state
+  const [testingMic, setTestingMic] = useState(false);
+  const [micStatusText, setMicStatusText] = useState('Standby');
+  const [micLevel, setMicLevel] = useState(0);
+  const [detectedCarrier, setDetectedCarrier] = useState(false);
+  const [micErrorDetails, setMicErrorDetails] = useState<string | null>(null);
 
   // Ultrasound promise resolver ref
   const ultrasoundResolverRef = useRef<((res: UltrasoundDetectionResult) => void) | null>(null);
@@ -30,14 +37,58 @@ export default function StudentClass() {
 
   const handleUltrasoundResult = (result: UltrasoundDetectionResult) => {
     console.log('[STUDENT][ULTRASOUND] Result received:', result);
-    setUltrasoundVerified(result.verified);
+    if (result.verified) {
+      setUltrasoundVerified(true);
+      setDetectedCarrier(true);
+      setMicStatusText('🎉 Classroom sound carrier detected!');
+    } else {
+      if (result.reason === 'MIC_PERMISSION_DENIED' || result.reason === 'NOT_SUPPORTED') {
+        setMicErrorDetails(result.details || 'Microphone access denied or unavailable');
+        setMicStatusText('🔴 Microphone access error');
+      }
+    }
+
     if (ultrasoundResolverRef.current) {
       ultrasoundResolverRef.current(result);
       ultrasoundResolverRef.current = null;
     }
   };
 
+  const toggleTestMic = async () => {
+    if (testingMic) {
+      setTestingMic(false);
+      setMicStatusText('Standby');
+      setMicLevel(0);
+      return;
+    }
+
+    try {
+      if (Platform.OS === 'android') {
+        const audioRes = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (audioRes !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert(
+            'Microphone Permission Required',
+            'Please grant microphone permission in device settings to test your microphone.'
+          );
+          return;
+        }
+      }
+
+      setDetectedCarrier(false);
+      setMicErrorDetails(null);
+      setMicStatusText('Opening microphone…');
+      setTestingMic(true);
+    } catch (e: any) {
+      Alert.alert('Microphone Test Error', e?.message || 'Could not start test');
+    }
+  };
+
   const scan = async () => {
+    // If mic test is running, stop it first
+    if (testingMic) {
+      setTestingMic(false);
+    }
+
     try {
       if (Platform.OS === 'android') {
         const audioRes = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
@@ -72,17 +123,10 @@ export default function StudentClass() {
           'Your physical presence inside the classroom has been confirmed via Bluetooth beacon and classroom proximity radar.'
         );
       } else {
-        if (result.bleTokenFound && !result.ultrasoundVerified) {
-          Alert.alert(
-            'Proxy Prevention Block 🚫',
-            'Teacher beacon was detected, but in-classroom proximity acoustic signal was NOT heard.\n\nSoundwaves cannot penetrate walls or closed doors. You must be physically inside the classroom.'
-          );
-        } else {
-          Alert.alert(
-            'Attendance Notice',
-            result.message || 'No matching active teacher attendance session found. Make sure your teacher has started attendance.'
-          );
-        }
+        Alert.alert(
+          'Attendance Notice',
+          result.message || 'No matching active teacher attendance session found. Make sure your teacher has started attendance.'
+        );
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : 'Scan failed';
@@ -121,6 +165,60 @@ export default function StudentClass() {
           </Text>
         </Pressable>
 
+        {/* Diagnostic Tool to check microphone hardware */}
+        <Pressable
+          style={[s.testMicButton, testingMic && s.testMicButtonActive]}
+          onPress={toggleTestMic}
+          disabled={scanning}
+        >
+          <Text style={s.testMicButtonText}>
+            {testingMic ? '⏹️ Stop Microphone Test' : '🎙️ Test Microphone & Room Sensor'}
+          </Text>
+        </Pressable>
+
+        {testingMic && (
+          <View style={s.diagCard}>
+            <View style={s.diagHeader}>
+              <Text style={s.diagTitle}>Microphone Diagnostic</Text>
+              <Text style={s.diagStatus}>{micStatusText}</Text>
+            </View>
+
+            {/* Live Volume / Mic Audio Level Bar */}
+            <Text style={s.diagLabel}>Live Input Level (Speak or tap phone to test):</Text>
+            <View style={s.levelBarBg}>
+              <View
+                style={[
+                  s.levelBarFill,
+                  { width: `${Math.max(4, Math.min(100, micLevel))}%` },
+                  micLevel > 12 ? s.levelBarActive : null
+                ]}
+              />
+            </View>
+            <Text style={s.levelSubtext}>
+              Input Level: {micLevel}% · {micLevel > 15 ? '🔊 Microphone picking up sound!' : '🔈 Quiet room sound'}
+            </Text>
+
+            {/* Proximity Carrier Detection Status */}
+            <View style={s.diagToneRow}>
+              <Text style={s.diagToneIcon}>{detectedCarrier ? '🟢' : '⏳'}</Text>
+              <Text style={[s.diagToneText, detectedCarrier && s.diagToneTextDetected]}>
+                {detectedCarrier
+                  ? 'Classroom acoustic carrier detected! Hardware link working.'
+                  : 'Listening for teacher sound… (Ensure teacher attendance is started & volume up)'}
+              </Text>
+            </View>
+
+            {micErrorDetails && (
+              <View style={s.diagErrorBox}>
+                <Text style={s.diagErrorText}>⚠️ Hardware Notice: {micErrorDetails}</Text>
+                <Text style={s.diagErrorSub}>
+                  Check Android Settings → Privacy → Microphone Access (make sure it is turned ON).
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Verification Status Card */}
         {(scanning || statusMessage.length > 0) && (
           <View style={[s.statusCard, isSuccess && s.statusCardSuccess]}>
@@ -146,7 +244,7 @@ export default function StudentClass() {
             {liveTelemetry && (
               <View style={s.telemetryBadge}>
                 <Text style={s.telemetryText}>
-                  Proximity Signal: SNR {liveTelemetry.snr}x · Signal Power: {liveTelemetry.power}
+                  Proximity Signal: SNR {liveTelemetry.snr}x · Signal Power: {liveTelemetry.power} · Mic: {liveTelemetry.micLevel || 0}%
                 </Text>
               </View>
             )}
@@ -164,9 +262,22 @@ export default function StudentClass() {
         <UltrasoundRadar
           mode="STUDENT_LISTENER"
           config={DEFAULT_ULTRASOUND}
-          active={scanning}
+          active={scanning || testingMic}
           onDetectionResult={handleUltrasoundResult}
-          onTelemetry={(telemetry) => setLiveTelemetry(telemetry)}
+          onTelemetry={(telemetry) => {
+            setLiveTelemetry(telemetry);
+            if (telemetry.micLevel !== undefined) {
+              setMicLevel(telemetry.micLevel);
+            }
+          }}
+          onStatusChange={(status, details) => {
+            if (status === 'LISTENING') {
+              setMicStatusText('🟢 Microphone is listening');
+            } else if (status === 'ERROR') {
+              setMicErrorDetails(details?.details || details?.error || 'Could not open microphone');
+              setMicStatusText('🔴 Microphone error');
+            }
+          }}
         />
       </ScrollView>
     </SafeAreaView>
@@ -190,6 +301,111 @@ const s = StyleSheet.create({
   buttonScanning: { backgroundColor: '#3b82f6' },
   buttonSuccess: { backgroundColor: '#059669' },
   buttonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  testMicButton: {
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  testMicButtonActive: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#fca5a5',
+  },
+  testMicButtonText: {
+    color: '#374151',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  diagCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#dbeafe',
+    gap: 8,
+  },
+  diagHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  diagTitle: {
+    fontWeight: '800',
+    fontSize: 14,
+    color: '#1e40af',
+  },
+  diagStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4b5563',
+  },
+  diagLabel: {
+    fontSize: 12,
+    color: '#4b5563',
+    fontWeight: '600',
+  },
+  levelBarBg: {
+    height: 14,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 7,
+    overflow: 'hidden',
+  },
+  levelBarFill: {
+    height: '100%',
+    backgroundColor: '#9ca3af',
+    borderRadius: 7,
+  },
+  levelBarActive: {
+    backgroundColor: '#10b981',
+  },
+  levelSubtext: {
+    fontSize: 11,
+    color: '#6b7280',
+    fontFamily: 'monospace',
+  },
+  diagToneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+    backgroundColor: '#f8fafc',
+    padding: 10,
+    borderRadius: 10,
+  },
+  diagToneIcon: {
+    fontSize: 14,
+  },
+  diagToneText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 16,
+  },
+  diagToneTextDetected: {
+    color: '#047857',
+    fontWeight: '700',
+  },
+  diagErrorBox: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 4,
+    gap: 2,
+  },
+  diagErrorText: {
+    color: '#b91c1c',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  diagErrorSub: {
+    color: '#7f1d1d',
+    fontSize: 11,
+  },
   statusCard: {
     backgroundColor: 'white',
     padding: 16,

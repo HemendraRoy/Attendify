@@ -20,8 +20,8 @@ export interface UltrasoundRadarProps {
   config?: UltrasoundConfig;
   active?: boolean;
   onDetectionResult?: (result: UltrasoundDetectionResult) => void;
-  onTelemetry?: (telemetry: { frequency: number; power: number; snr: number }) => void;
-  onStatusChange?: (status: string) => void;
+  onTelemetry?: (telemetry: { frequency: number; power: number; snr: number; micLevel?: number; micActive?: boolean }) => void;
+  onStatusChange?: (status: string, details?: any) => void;
 }
 
 export interface UltrasoundRadarRef {
@@ -223,7 +223,7 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
           <WebViewComponent
             ref={webViewRef}
             originWhitelist={['*']}
-            source={{ html: htmlContent }}
+            source={{ html: htmlContent, baseUrl: 'https://localhost' }}
             javaScriptEnabled={true}
             domStorageEnabled={true}
             mediaPlaybackRequiresUserAction={false}
@@ -236,6 +236,8 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
                   onDetectionResult?.(data);
                 } else if (data.type === 'RADAR_TELEMETRY') {
                   onTelemetry?.(data);
+                } else if (data.type === 'RADAR_STATUS') {
+                  onStatusChange?.(data.status, data);
                 } else if (data.type === 'EMITTER_STARTED') {
                   onStatusChange?.('EMITTING_20KHZ');
                 } else if (data.type === 'EMITTER_STOPPED') {

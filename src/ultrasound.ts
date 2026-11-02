@@ -8,16 +8,16 @@
 
 export interface UltrasoundConfig {
   frequency: number; // Target frequency in Hz (Default: 20000 Hz)
-  tolerance: number; // Allowed frequency deviation in Hz (+/- 500 Hz error range)
-  minSnr: number;    // Minimum Signal-to-Noise Ratio (Default: 1.30)
-  timeoutMs: number; // Timeout before concluding sound is not detected (Default: 6500ms)
+  tolerance: number; // Allowed frequency deviation in Hz (+/- 1400 Hz range)
+  minSnr: number;    // Minimum Signal-to-Noise Ratio (Default: 1.10)
+  timeoutMs: number; // Timeout before concluding sound is not detected (Default: 12000ms)
 }
 
 export const DEFAULT_ULTRASOUND: UltrasoundConfig = {
   frequency: 20000,
-  tolerance: 800, // Accepts 19,200 Hz - 20,800 Hz (covers OEM mic hardware downsampling)
-  minSnr: 1.15,
-  timeoutMs: 9000,
+  tolerance: 1400, // Accepts 18,600 Hz - 21,400 Hz (covers OEM mic hardware downsampling & clock drift)
+  minSnr: 1.10,
+  timeoutMs: 12000,
 };
 
 export interface UltrasoundDetectionResult {
@@ -26,6 +26,8 @@ export interface UltrasoundDetectionResult {
   snr?: number;
   confidence?: number;
   power?: number;
+  micLevel?: number;
+  micActive?: boolean;
   reason?: 'DETECTED' | 'ACOUSTIC_SIGNAL_NOT_DETECTED' | 'MIC_PERMISSION_DENIED' | 'NOT_SUPPORTED' | 'ERROR';
   details?: string;
 }
@@ -279,6 +281,7 @@ export function buildRadarHtml(
     var pollTimer = null;
     var timeoutTimer = null;
     var isDone = false;
+    var lastError = null;
 
     function finish(result) {
       if (isDone) return;
@@ -292,22 +295,47 @@ export function buildRadarHtml(
       sendEvent("LISTENER_RESULT", result);
     }
 
+    // Always wait for the full timeout before concluding failure
     timeoutTimer = setTimeout(function() {
-      finish({ verified: false, reason: "ACOUSTIC_SIGNAL_NOT_DETECTED" });
+      if (!isDone) {
+        finish({
+          verified: false,
+          reason: lastError ? "MIC_PERMISSION_DENIED" : "ACOUSTIC_SIGNAL_NOT_DETECTED",
+          details: lastError ? lastError.message || String(lastError) : "Classroom proximity tone not detected within listening window."
+        });
+      }
     }, timeoutMs);
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      finish({ verified: false, reason: "NOT_SUPPORTED", details: "getUserMedia unavailable" });
-      return;
+    function getMicMedia() {
+      // 1. Try modern navigator.mediaDevices with raw audio constraints
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        return navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        }).catch(function(errPrimary) {
+          console.warn("[LISTENER] Raw constraints rejected, retrying with audio: true", errPrimary);
+          return navigator.mediaDevices.getUserMedia({ audio: true });
+        });
+      }
+
+      // 2. Fallback to legacy vendor-prefixed getUserMedia
+      var legacyGUM = navigator.getUserMedia ||
+                      navigator.webkitGetUserMedia ||
+                      navigator.mozGetUserMedia ||
+                      navigator.msGetUserMedia;
+      if (legacyGUM) {
+        return new Promise(function(resolve, reject) {
+          legacyGUM.call(navigator, { audio: true }, resolve, reject);
+        });
+      }
+
+      return Promise.reject(new Error("getUserMedia is not supported on this device/webview origin."));
     }
 
-    navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      }
-    }).then(function(stream) {
+    getMicMedia().then(function(stream) {
       if (isDone) {
         try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch(e) {}
         return;
@@ -315,16 +343,17 @@ export function buildRadarHtml(
       micStream = stream;
       audioCtx = getAudioContext();
       if (!audioCtx) {
-        finish({ verified: false, reason: "ERROR", details: "AudioContext init failed" });
+        lastError = new Error("AudioContext creation failed");
+        sendEvent("RADAR_STATUS", { status: "ERROR", details: "AudioContext init failed" });
         return;
       }
 
       var source = audioCtx.createMediaStreamSource(stream);
 
-      // Highpass filter at 17,200 Hz to isolate near-ultrasound from voices, room noise, and AC
+      // Highpass filter at 17,000 Hz to isolate near-ultrasound
       var highpass = audioCtx.createBiquadFilter();
       highpass.type = "highpass";
-      highpass.frequency.value = 17200;
+      highpass.frequency.value = 17000;
       highpass.Q.value = 0.7;
 
       var analyser = audioCtx.createAnalyser();
@@ -333,6 +362,13 @@ export function buildRadarHtml(
 
       source.connect(highpass);
       highpass.connect(analyser);
+
+      // Secondary analyser for overall microphone level (voice / ambient volume bar)
+      var voiceAnalyser = audioCtx.createAnalyser();
+      voiceAnalyser.fftSize = 512;
+      voiceAnalyser.smoothingTimeConstant = 0.2;
+      source.connect(voiceAnalyser);
+      var voiceData = new Uint8Array(voiceAnalyser.frequencyBinCount);
 
       var sampleRate = audioCtx.sampleRate;
       var binSize = sampleRate / analyser.fftSize;
@@ -345,18 +381,29 @@ export function buildRadarHtml(
       var startBin = Math.max(0, Math.floor(targetMin / binSize));
       var endBin   = Math.min(bufferLength - 1, Math.ceil(targetMax / binSize));
 
-      // Guard noise floor bins (below 17.6 kHz and above 21.0 kHz)
-      var guardLowBin = Math.floor(17400 / binSize);
-      var guardHighBin = Math.floor(21200 / binSize);
+      // Guard noise floor bins
+      var guardLowBin = Math.max(0, Math.floor(17400 / binSize));
+      var guardHighBin = Math.min(bufferLength - 1, Math.floor(21400 / binSize));
+
+      sendEvent("RADAR_STATUS", { status: "LISTENING", message: "Microphone active & analyzing acoustic spectrum" });
 
       pollTimer = setInterval(function() {
         if (isDone) return;
         analyser.getByteFrequencyData(dataArray);
+        voiceAnalyser.getByteFrequencyData(voiceData);
+
+        // Calculate live microphone volume level (0 to 100)
+        var voiceSum = 0;
+        for (var v = 0; v < voiceData.length; v++) {
+          voiceSum += voiceData[v];
+        }
+        var avgVoice = voiceSum / voiceData.length;
+        var liveMicLevel = Math.min(100, Math.round((avgVoice / 180) * 100));
 
         var noiseFloor = Math.max(
           dataArray[guardLowBin] || 0,
           dataArray[guardHighBin] || 0,
-          8 // baseline floor
+          6 // baseline floor
         );
 
         var peakVal = 0;
@@ -368,37 +415,41 @@ export function buildRadarHtml(
           }
         }
 
-        if (peakBin > -1 && peakVal >= 8) {
-          var peakFreq = peakBin * binSize;
-          var snr = peakVal / noiseFloor;
+        var peakFreq = peakBin > -1 ? Math.round(peakBin * binSize) : targetFreq;
+        var snr = peakVal / noiseFloor;
 
-          // Emit live telemetry to React Native
-          sendEvent("RADAR_TELEMETRY", {
-            frequency: Math.round(peakFreq),
+        // Emit continuous telemetry to React Native so the UI & diagnostic meter update in real time
+        sendEvent("RADAR_TELEMETRY", {
+          frequency: peakFreq,
+          power: peakVal,
+          snr: Number(snr.toFixed(2)),
+          micLevel: liveMicLevel,
+          micActive: true
+        });
+
+        // Classroom sound carrier detected!
+        if (peakBin > -1 && snr >= minSnr && peakVal >= 7) {
+          finish({
+            verified: true,
+            reason: "DETECTED",
+            frequency: peakFreq,
+            snr: Number(snr.toFixed(2)),
             power: peakVal,
-            snr: Number(snr.toFixed(2))
+            micLevel: liveMicLevel,
+            confidence: Math.min(0.99, Number((0.6 + (snr / 10)).toFixed(2)))
           });
-
-          // Ultrasonic carrier detected above threshold!
-          if (snr >= minSnr && peakVal >= 9) {
-            finish({
-              verified: true,
-              reason: "DETECTED",
-              frequency: Math.round(peakFreq),
-              snr: Number(snr.toFixed(2)),
-              power: peakVal,
-              confidence: Math.min(0.99, Number((0.6 + (snr / 10)).toFixed(2)))
-            });
-          }
         }
       }, 90);
 
     }).catch(function(err) {
-      finish({
-        verified: false,
-        reason: "MIC_PERMISSION_DENIED",
-        details: err.message
+      console.warn("[LISTENER] Microphone access error:", err);
+      lastError = err;
+      sendEvent("RADAR_STATUS", {
+        status: "ERROR",
+        error: err.name || "MIC_ERROR",
+        details: err.message || String(err)
       });
+      // Note: We do NOT abort immediately! Let the full timeout run so diagnostics remain visible.
     });
   }
 })();
