@@ -215,26 +215,13 @@ export async function startTeacherBeacon(
       },
     ]);
 
-    // 2. Start advertising with service UUID, localName, manufacturerData, and serviceData128
-    const hexToken = utf8ToHex(token);
+    // 2. Start advertising with service UUID and localName
     startAdvertising({
       serviceUUIDs: [config.serviceUUID],
-      localName: `ATTEND_${token}`,
-      manufacturerData: `ffff${hexToken}`,
-      advertisingData: {
-        completeLocalName: `ATTEND_${token}`,
-        shortenedLocalName: `ATT_${token}`,
-        manufacturerData: `ffff${hexToken}`,
-        serviceData128: [
-          {
-            uuid: config.serviceUUID,
-            data: hexToken,
-          },
-        ],
-      },
+      localName: `ATT_${token}`,
     });
 
-    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATTEND_${token} + manufacturerData + serviceData128), waiting for confirmation...`);
+    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATT_${token}), waiting for confirmation...`);
     await startPromise;
     console.log('[BLE][TEACHER] 🚀 Teacher BLE Beacon is officially live');
   } catch (error) {

@@ -57,21 +57,32 @@ export default function TeacherClass() {
       const code = r.code || r.bleToken;
       setSessionCode(code);
 
+      let bleStarted = false;
       try {
-        // 1. Start BLE Beacon
+        // 1. Try starting BLE Beacon
         await startTeacherBeacon(r.bleToken, r.ble);
+        bleStarted = true;
+      } catch (beaconErr) {
+        console.warn('[TEACHER] Bluetooth beacon could not start:', beaconErr);
+        // Do not abort session - ultrasound and backend fallback allow attendance to work seamlessly!
+      }
 
+      try {
         // 2. Start Ultrasound Acoustic Carrier (20,000 Hz)
         setUltrasoundEmitting(true);
         radarRef.current?.start();
       } catch (e) {
-        await api.endAttendance(r.session.id).catch(() => {});
-        setUltrasoundEmitting(false);
-        setSessionCode(null);
-        throw e;
+        console.warn('[TEACHER] Ultrasound emitter error:', e);
       }
 
       setSession(r.session);
+
+      if (!bleStarted) {
+        Alert.alert(
+          'Bluetooth Beacon Notice',
+          'Bluetooth advertising is not supported or active on this device. Attendance will operate smoothly using the 20 kHz Ultrasonic presence radar and class session code!'
+        );
+      }
     } catch (e) {
       Alert.alert('Attendance Error', e instanceof Error ? e.message : 'Could not start attendance');
     } finally {
