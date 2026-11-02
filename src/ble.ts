@@ -113,7 +113,8 @@ export async function checkBleReady(): Promise<any> {
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
       ].filter(Boolean);
 
       try {
@@ -126,7 +127,8 @@ export async function checkBleReady(): Promise<any> {
       try {
         await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
         ]);
       } catch (err) {
         console.warn('[BLE] Location permission request error:', err);
@@ -215,10 +217,9 @@ export async function startTeacherBeacon(
 
     console.log('[BLE][TEACHER] ✅ GATT service configured');
 
-    // 2. Start advertising with local name and service UUID
+    // 2. Start advertising with service UUID only to prevent 31-byte packet size overflow
     startAdvertising({
       serviceUUIDs: [config.serviceUUID],
-      localName: config.deviceName || 'Attendify',
     });
 
     console.log('[BLE][TEACHER] ✅ Advertising request sent, waiting for confirmation...');

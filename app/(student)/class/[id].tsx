@@ -1,6 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState, useRef } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View, ScrollView } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View, ScrollView, Platform, PermissionsAndroid } from 'react-native';
 import { api } from '@/api';
 import { verifyAndMarkAttendance } from '@/attendance';
 import { stopStudentScan } from '@/ble';
@@ -30,9 +30,7 @@ export default function StudentClass() {
 
   const handleUltrasoundResult = (result: UltrasoundDetectionResult) => {
     console.log('[STUDENT][ULTRASOUND] Result received:', result);
-    if (result.verified) {
-      setUltrasoundVerified(true);
-    }
+    setUltrasoundVerified(result.verified);
     if (ultrasoundResolverRef.current) {
       ultrasoundResolverRef.current(result);
       ultrasoundResolverRef.current = null;
@@ -41,6 +39,13 @@ export default function StudentClass() {
 
   const scan = async () => {
     try {
+      if (Platform.OS === 'android') {
+        const audioRes = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (audioRes !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Microphone Access Required', 'Please grant microphone access so the 20 kHz classroom acoustic presence detector can operate.');
+          return;
+        }
+      }
       setScanning(true);
       setBleDetected(false);
       setUltrasoundVerified(false);
@@ -103,7 +108,7 @@ export default function StudentClass() {
         <Text style={s.title}>{data.name}</Text>
         <Text style={s.muted}>Teacher: {data.teacher.name}</Text>
         <Text style={s.infoText}>
-          Dual-Factor Verification: Keep your phone out in the classroom. The app verifies both Bluetooth proximity and silent 20 kHz classroom ultrasound.
+          Dual-Factor Verification: Keep your phone out in the classroom. Ensure Bluetooth and Location (GPS) are turned ON in quick settings.
         </Text>
 
         <Pressable

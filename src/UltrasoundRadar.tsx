@@ -193,27 +193,6 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
       }
     }, [mode, active, config.frequency, config.tolerance, config.minSnr, config.timeoutMs]);
 
-    // Native platform fallback if WebView is not installed
-    useEffect(() => {
-      if (Platform.OS === 'web' || WebViewComponent || !active) return;
-
-      if (mode === 'TEACHER_EMITTER') {
-        onStatusChange?.('EMITTING_20KHZ');
-      } else if (mode === 'STUDENT_LISTENER') {
-        const timer = setTimeout(() => {
-          onDetectionResult?.({
-            verified: true,
-            reason: 'DETECTED',
-            frequency: config.frequency,
-            snr: 2.2,
-            power: 32,
-            confidence: 0.96
-          });
-        }, 400);
-        return () => clearTimeout(timer);
-      }
-    }, [mode, active, config.frequency]);
-
     useImperativeHandle(ref, () => ({
       start: () => {
         if (webViewRef.current) {
@@ -249,6 +228,7 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
             domStorageEnabled={true}
             mediaPlaybackRequiresUserAction={false}
             allowsInlineMediaPlayback={true}
+            mediaCapturePermissionGrantType="grant"
             onMessage={(event: any) => {
               try {
                 const data = JSON.parse(event.nativeEvent.data);
@@ -277,17 +257,18 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
 
 const styles = StyleSheet.create({
   hiddenContainer: {
-    width: 1,
-    height: 1,
-    opacity: 0,
+    width: 2,
+    height: 2,
+    opacity: 0.01,
     position: 'absolute',
-    top: -100,
-    left: -100,
+    bottom: 0,
+    right: 0,
     overflow: 'hidden',
+    zIndex: -1,
   },
   webView: {
-    width: 1,
-    height: 1,
-    opacity: 0,
+    width: 2,
+    height: 2,
+    opacity: 0.01,
   },
 });
