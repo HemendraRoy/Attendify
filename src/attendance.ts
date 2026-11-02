@@ -37,6 +37,7 @@ export async function verifyAndMarkAttendance(
     let totalBleScanned = 0;
     let done = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let activeSessionTimer: ReturnType<typeof setTimeout> | undefined;
     let stopScanFn: (() => void) | undefined;
     let acquiredToken: string | null = null;
 
@@ -50,6 +51,7 @@ export async function verifyAndMarkAttendance(
       if (done) return;
       done = true;
       if (timeout) clearTimeout(timeout);
+      if (activeSessionTimer) clearTimeout(activeSessionTimer);
       try { stopScanFn?.(); } catch {}
 
       if (error) {
@@ -69,6 +71,76 @@ export async function verifyAndMarkAttendance(
         resolve(result);
       }
     };
+
+    // Active session fallback after 3.5s (reference architecture from sih_2025):
+    activeSessionTimer = setTimeout(async () => {
+      if (done || acquiredToken) return;
+      try {
+        console.log('[ATTENDANCE] Checking backend for active class session...');
+        const activeRes = await api.getActiveSession(classId);
+
+        if (activeRes.alreadyMarked) {
+          finish({
+            marked: true,
+            candidates: 1,
+            bleTokenFound: true,
+            ultrasoundVerified: true,
+            message: 'You have already marked attendance for this session! ✓'
+          });
+          return;
+        }
+
+        if (activeRes.active && activeRes.sessionId) {
+          console.log('[ATTENDANCE] Active session found in database, verifying 20 kHz acoustic room presence...');
+          onProgress?.({
+            stage: 'VERIFYING_ULTRASOUND',
+            message: 'Active class session found! Verifying 20 kHz acoustic presence in classroom...',
+            bleFound: true,
+            candidatesCount: 1
+          });
+
+          let ultraResult: UltrasoundDetectionResult;
+          try {
+            ultraResult = await ultrasoundPromise;
+          } catch (e: any) {
+            ultraResult = { verified: false, reason: 'ERROR', details: e?.message };
+          }
+
+          if (!ultraResult.verified) {
+            finish({
+              marked: false,
+              candidates: 1,
+              bleTokenFound: true,
+              ultrasoundVerified: false,
+              ultrasoundDetails: ultraResult,
+              message: 'Proxy Prevention Alert: Active class session detected, but 20 kHz ultrasound was NOT heard. You must be physically inside the room with the teacher.'
+            });
+            return;
+          }
+
+          onProgress?.({
+            stage: 'SUBMITTING',
+            message: 'Physical presence verified! Recording attendance...',
+            bleFound: true,
+            ultrasoundVerified: true,
+            candidatesCount: 1
+          });
+
+          await api.markAttendance(classId, undefined, true, activeRes.sessionId);
+
+          finish({
+            marked: true,
+            candidates: 1,
+            bleTokenFound: true,
+            ultrasoundVerified: true,
+            ultrasoundDetails: ultraResult,
+            message: 'Attendance verified and recorded successfully via 20 kHz Acoustic Radar!'
+          });
+        }
+      } catch (err: any) {
+        console.log('[ATTENDANCE] Active session check error:', err?.message);
+      }
+    }, 3500);
 
     // Generous 25s timeout for complete discovery + connection + GATT read + ultrasound verification
     timeout = setTimeout(async () => {

@@ -97,14 +97,23 @@ export const api = {
       attendance: AttendanceRow[];
     }>(`/attendance/classes/${classId}/current`),
 
+  getActiveSession: (classId: string) =>
+    request<{
+      active: boolean;
+      sessionId?: string;
+      alreadyMarked?: boolean;
+      expiresAt?: string;
+    }>(`/attendance/classes/${classId}/active`),
+
   markAttendance: (
     classId: string,
-    bleToken: string,
-    ultrasoundVerified: boolean = false
+    bleToken?: string,
+    ultrasoundVerified: boolean = false,
+    sessionId?: string
   ) =>
     request<{ attendance: AttendanceRow; message: string }>('/attendance/mark', {
       method: 'POST',
-      body: JSON.stringify({ classId, bleToken, ultrasoundVerified }),
+      body: JSON.stringify({ classId, bleToken, ultrasoundVerified, sessionId }),
     }),
 
   history: () =>

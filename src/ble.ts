@@ -215,13 +215,13 @@ export async function startTeacherBeacon(
       },
     ]);
 
-    // 2. Start advertising with service UUID and compact localName (ATT-XXXXXX)
+    // 2. Start advertising with service UUID and compact localName (ATTEND_XXXXXX)
     startAdvertising({
       serviceUUIDs: [config.serviceUUID],
-      localName: `ATT-${token}`,
+      localName: `ATTEND_${token}`,
     });
 
-    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATT-${token}), waiting for confirmation...`);
+    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATTEND_${token}), waiting for confirmation...`);
     await startPromise;
     console.log('[BLE][TEACHER] 🚀 Teacher BLE Beacon is officially live');
   } catch (error) {
@@ -305,8 +305,8 @@ export async function listenAndStartScan(
     const advertisedUUIDs: string[] = device.serviceUUIDs ?? [];
     const hasServiceUUID = advertisedUUIDs.some((uuid: string) => normalizeUuid(uuid) === targetServiceUUIDNorm);
 
-    // 2. Match by localName or device name
-    const hasAttPrefix = /ATT-[0-9a-zA-Z]+/i.test(rawName);
+    // 2. Match by localName or device name (matches ATTEND_ or ATT-)
+    const hasAttPrefix = /(?:ATT-|ATTEND_)[0-9a-zA-Z]+/i.test(rawName);
     const hasNameMatch = lowerName.includes('attendify') || hasAttPrefix;
 
     // 3. Match by service data if available
@@ -325,8 +325,8 @@ export async function listenAndStartScan(
     seenDeviceIds.add(deviceId);
     console.log(`[BLE][STUDENT] 🎯 Target candidate found: ${deviceId} (${rawName || 'Unknown'})`);
 
-    // FAST-LOCK: If device name contains ATT-XXXXXX, extract code directly with zero GATT latency
-    const directCodeMatch = rawName.match(/ATT-([0-9a-zA-Z]{4,12})/i);
+    // FAST-LOCK: If device name contains ATTEND_XXXXXX or ATT-XXXXXX, extract code directly with zero GATT latency
+    const directCodeMatch = rawName.match(/(?:ATT-|ATTEND_)([0-9a-zA-Z]{4,12})/i);
     if (directCodeMatch) {
       const broadcastCode = directCodeMatch[1];
       console.log(`[BLE][STUDENT] 🚀 FAST-LOCK: Extracted attendance code "${broadcastCode}" directly from BLE advertisement!`);
