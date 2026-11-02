@@ -5,6 +5,7 @@ node_modules/
 
 # Android build outputs & native caches
 android/.gradle/
+android/.kotlin/
 android/app/build/
 android/build/
 android/app/.cxx/
