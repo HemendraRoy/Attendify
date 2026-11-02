@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:10000';
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://attendify-rebuild-backend-l9r4.onrender.com';
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await SecureStore.getItemAsync('access_token');

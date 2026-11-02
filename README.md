@@ -23,7 +23,7 @@ By combining short-range Bluetooth Low Energy with physical room-bounded ultraso
 
 The system operates across two coordinated layers:
 1. **Mobile Application (`Attendify`)**: Runs on both Teacher and Student Android devices. Handles BLE advertising/scanning, ultrasound synthesis/detection, live telemetry, and local security.
-2. **Cloud API Server (`backend`)**: Deployed on Render (`https://attendify-rebuild-backend.onrender.com`). Validates token freshness, checks class membership, ensures duplicate protection, and provides real-time roster updates.
+2. **Cloud API Server (`backend`)**: Deployed on Render (`https://attendify-rebuild-backend-l9r4.onrender.com`). Validates token freshness, checks class membership, ensures duplicate protection, and provides real-time roster updates.
 
 ---
 
@@ -103,7 +103,7 @@ The original mobile BLE implementation suffered from multiple critical bugs that
 ## 🌐 Backend Architecture & Cloud Integration
 
 The mobile app connects to the Attendify backend deployed on **Render**:
-- **Production API URL:** `https://attendify-rebuild-backend.onrender.com`
+- **Production API URL:** `https://attendify-rebuild-backend-l9r4.onrender.com`
 
 ### Core Backend Endpoints Used by the Mobile App
 
@@ -202,7 +202,7 @@ npm install
 ### 2. Configure Environment
 Create a `.env` file in the `Attendify` root:
 ```env
-EXPO_PUBLIC_API_URL=https://attendify-rebuild-backend.onrender.com
+EXPO_PUBLIC_API_URL=https://attendify-rebuild-backend-l9r4.onrender.com
 ```
 
 ### 3. Run in Development Mode
@@ -223,7 +223,7 @@ A fully compiled, production-signed release APK is ready for immediate deploymen
 - **File Path:** [`Attendify-release.apk`](Attendify-release.apk) (in this directory)
 - **Architecture:** `arm64-v8a`
 - **Signature:** Android APK Signature Scheme v2 verified (`apksigner verify: true`)
-- **Backend Connected:** `https://attendify-rebuild-backend.onrender.com`
+- **Backend Connected:** `https://attendify-rebuild-backend-l9r4.onrender.com`
 
 ### How to Install:
 - **Via ADB:**
