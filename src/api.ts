@@ -79,6 +79,7 @@ export const api = {
     request<{
       session: AttendanceSession;
       bleToken: string;
+      code?: string;
       ble: BLEConfig;
     }>('/attendance/sessions/start', {
       method: 'POST',

@@ -1,6 +1,6 @@
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useRef } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/api';
 import { startTeacherBeacon, stopTeacherBeacon } from '@/ble';
@@ -14,6 +14,7 @@ export default function TeacherClass() {
   const [rows, setRows] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [ultrasoundEmitting, setUltrasoundEmitting] = useState(false);
+  const [sessionCode, setSessionCode] = useState<string | null>(null);
   const radarRef = useRef<UltrasoundRadarRef>(null);
 
   const load = async () => {
@@ -53,6 +54,8 @@ export default function TeacherClass() {
     try {
       setBusy(true);
       const r = await api.startAttendance(id!);
+      const code = r.code || r.bleToken;
+      setSessionCode(code);
 
       try {
         // 1. Start BLE Beacon
@@ -64,6 +67,7 @@ export default function TeacherClass() {
       } catch (e) {
         await api.endAttendance(r.session.id).catch(() => {});
         setUltrasoundEmitting(false);
+        setSessionCode(null);
         throw e;
       }
 
@@ -82,6 +86,7 @@ export default function TeacherClass() {
       setUltrasoundEmitting(false);
       radarRef.current?.stop();
       setSession(null);
+      setSessionCode(null);
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Could not stop session');
     }
@@ -124,6 +129,17 @@ export default function TeacherClass() {
               <Text style={s.liveTitle}>Attendance is Live</Text>
             </View>
 
+            {/* Prominent Live Classroom Code Display */}
+            {sessionCode && (
+              <View style={s.codeBox}>
+                <Text style={s.codeLabel}>IN-CLASS ATTENDANCE CODE</Text>
+                <Text style={s.codeValue}>{sessionCode}</Text>
+                <Text style={s.codeHelp}>
+                  Broadcasting as ATT-{sessionCode} & 20 kHz Acoustic Radar. Students can auto-scan or type this code.
+                </Text>
+              </View>
+            )}
+
             <View style={s.statBadge}>
               <Text style={s.statNumber}>{rows.length}</Text>
               <Text style={s.statLabel}>Students present</Text>
@@ -132,7 +148,9 @@ export default function TeacherClass() {
             <View style={s.techBadges}>
               <View style={s.badge}>
                 <Text style={s.badgeDot}>🟢</Text>
-                <Text style={s.badgeText}>BLE Beacon: Advertising Active</Text>
+                <Text style={s.badgeText}>
+                  BLE Beacon: Broadcasting (ATT-{sessionCode || 'Active'})
+                </Text>
               </View>
               <View style={[s.badge, s.badgeUltrasound]}>
                 <Text style={s.badgeDot}>🔊</Text>
@@ -200,6 +218,34 @@ const s = StyleSheet.create({
     padding: 18,
     borderRadius: 18,
     gap: 10,
+  },
+  codeBox: {
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+    gap: 4,
+    marginVertical: 4,
+  },
+  codeLabel: {
+    color: '#9ca3af',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  codeValue: {
+    color: '#34d399',
+    fontSize: 36,
+    fontWeight: '900',
+    letterSpacing: 6,
+    fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
+    marginVertical: 2,
+  },
+  codeHelp: {
+    color: '#d1d5db',
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 16,
   },
   liveHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   livePulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#059669' },

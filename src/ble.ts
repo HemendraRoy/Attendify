@@ -215,14 +215,13 @@ export async function startTeacherBeacon(
       },
     ]);
 
-    console.log('[BLE][TEACHER] ✅ GATT service configured');
-
-    // 2. Start advertising with service UUID only to prevent 31-byte packet size overflow
+    // 2. Start advertising with service UUID and compact localName (ATT-XXXXXX)
     startAdvertising({
       serviceUUIDs: [config.serviceUUID],
+      localName: `ATT-${token}`,
     });
 
-    console.log('[BLE][TEACHER] ✅ Advertising request sent, waiting for confirmation...');
+    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATT-${token}), waiting for confirmation...`);
     await startPromise;
     console.log('[BLE][TEACHER] 🚀 Teacher BLE Beacon is officially live');
   } catch (error) {
@@ -307,7 +306,8 @@ export async function listenAndStartScan(
     const hasServiceUUID = advertisedUUIDs.some((uuid: string) => normalizeUuid(uuid) === targetServiceUUIDNorm);
 
     // 2. Match by localName or device name
-    const hasNameMatch = lowerName.includes('attendify');
+    const hasAttPrefix = /ATT-[0-9a-zA-Z]+/i.test(rawName);
+    const hasNameMatch = lowerName.includes('attendify') || hasAttPrefix;
 
     // 3. Match by service data if available
     const serviceData: any[] = device.serviceData ?? [];
@@ -315,7 +315,7 @@ export async function listenAndStartScan(
       entry?.uuid && normalizeUuid(entry.uuid) === targetServiceUUIDNorm
     );
 
-    const isMatch = hasServiceUUID || hasNameMatch || hasServiceData;
+    const isMatch = hasServiceUUID || hasNameMatch || hasServiceData || hasAttPrefix;
 
     console.log(`[BLE][SCAN] #${totalDiscoveredCount}: id=${deviceId}, name="${rawName}", UUIDs=${JSON.stringify(advertisedUUIDs)}, match=${isMatch}`);
     onDiscovered?.({ totalScanned: totalDiscoveredCount, matched: isMatch, deviceName: rawName || 'Unknown Device' });
@@ -324,6 +324,20 @@ export async function listenAndStartScan(
 
     seenDeviceIds.add(deviceId);
     console.log(`[BLE][STUDENT] 🎯 Target candidate found: ${deviceId} (${rawName || 'Unknown'})`);
+
+    // FAST-LOCK: If device name contains ATT-XXXXXX, extract code directly with zero GATT latency
+    const directCodeMatch = rawName.match(/ATT-([0-9a-zA-Z]{4,12})/i);
+    if (directCodeMatch) {
+      const broadcastCode = directCodeMatch[1];
+      console.log(`[BLE][STUDENT] 🚀 FAST-LOCK: Extracted attendance code "${broadcastCode}" directly from BLE advertisement!`);
+      void onCandidate({
+        deviceId,
+        token: broadcastCode,
+        name: rawName,
+        rssi: device.rssi,
+      });
+      return;
+    }
 
     // Queue connection sequentially to avoid concurrent GATT operations
     connectionQueue.enqueue(async () => {
