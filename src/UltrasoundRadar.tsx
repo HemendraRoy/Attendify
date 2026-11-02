@@ -257,18 +257,17 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
 
 const styles = StyleSheet.create({
   hiddenContainer: {
-    width: 2,
-    height: 2,
-    opacity: 0.01,
+    width: 24,
+    height: 24,
+    opacity: 0.05,
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    overflow: 'hidden',
-    zIndex: -1,
+    bottom: -100,
+    right: -100,
+    zIndex: -999,
   },
   webView: {
-    width: 2,
-    height: 2,
-    opacity: 0.01,
+    width: 24,
+    height: 24,
+    backgroundColor: 'transparent',
   },
 });

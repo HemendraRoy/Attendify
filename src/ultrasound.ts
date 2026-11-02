@@ -15,9 +15,9 @@ export interface UltrasoundConfig {
 
 export const DEFAULT_ULTRASOUND: UltrasoundConfig = {
   frequency: 20000,
-  tolerance: 500, // Accepts 19,500 Hz - 20,500 Hz (+/- 500 Hz error range)
-  minSnr: 1.30,
-  timeoutMs: 6500,
+  tolerance: 800, // Accepts 19,200 Hz - 20,800 Hz (covers OEM mic hardware downsampling)
+  minSnr: 1.15,
+  timeoutMs: 9000,
 };
 
 export interface UltrasoundDetectionResult {
@@ -191,44 +191,63 @@ export function buildRadarHtml(
     var gain = null;
     var isBroadcasting = false;
 
+    var audioElem = null;
+
     window.startEmitter = function(freq) {
       if (isBroadcasting) window.stopEmitter();
+      var frequency = freq || targetFreq;
+      
+      // 1. AudioContext oscillator playback
       try {
         audioCtx = getAudioContext();
-        if (!audioCtx) {
-          sendEvent("ERROR", { reason: "AUDIO_CONTEXT_FAILED" });
-          return;
+        if (audioCtx) {
+          if (audioCtx.state === "suspended") {
+            audioCtx.resume().catch(function(){});
+          }
+          var now = audioCtx.currentTime;
+          osc = audioCtx.createOscillator();
+          gain = audioCtx.createGain();
+
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(frequency, now);
+
+          gain.gain.setValueAtTime(0.0001, now);
+          gain.gain.linearRampToValueAtTime(0.75, now + 0.05);
+
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(now);
         }
-
-        var frequency = freq || targetFreq;
-        var now = audioCtx.currentTime;
-
-        osc = audioCtx.createOscillator();
-        gain = audioCtx.createGain();
-
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(frequency, now);
-
-        // Smooth 30ms raised ramp to 0.35 volume for crisp room transmission with zero audible clicks
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.linearRampToValueAtTime(0.35, now + 0.03);
-
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start(now);
-
-        isBroadcasting = true;
-        sendEvent("EMITTER_STARTED", { frequency: frequency });
       } catch (err) {
-        sendEvent("ERROR", { reason: err.message });
+        console.warn("[EMITTER] AudioContext error:", err);
       }
+
+      // 2. Dual fallback: HTML5 <audio> looping PCM WAV carrier wave
+      try {
+        if (!audioElem) {
+          audioElem = document.createElement("audio");
+          audioElem.loop = true;
+          audioElem.autoplay = true;
+          document.body.appendChild(audioElem);
+        }
+        audioElem.src = "${generateUltrasoundWavDataUri(targetFreq, 48000, 1.0, 0.85)}";
+        audioElem.volume = 1.0;
+        audioElem.play().catch(function(e) {
+          console.warn("[EMITTER] audioElem play error:", e);
+        });
+      } catch (e) {
+        console.warn("[EMITTER] audioElem setup error:", e);
+      }
+
+      isBroadcasting = true;
+      sendEvent("EMITTER_STARTED", { frequency: frequency });
     };
 
     window.stopEmitter = function() {
-      if (!isBroadcasting || !audioCtx) return;
+      if (!isBroadcasting) return;
       try {
-        var now = audioCtx.currentTime;
-        if (gain) {
+        if (gain && audioCtx) {
+          var now = audioCtx.currentTime;
           gain.gain.setValueAtTime(gain.gain.value, now);
           gain.gain.linearRampToValueAtTime(0.0001, now + 0.025);
         }
@@ -237,12 +256,18 @@ export function buildRadarHtml(
             if (osc) { osc.stop(); osc.disconnect(); }
             if (gain) { gain.disconnect(); }
           } catch(e) {}
-          isBroadcasting = false;
-          sendEvent("EMITTER_STOPPED");
         }, 30);
-      } catch (err) {
-        isBroadcasting = false;
-      }
+      } catch (err) {}
+
+      try {
+        if (audioElem) {
+          audioElem.pause();
+          audioElem.currentTime = 0;
+        }
+      } catch (e) {}
+
+      isBroadcasting = false;
+      sendEvent("EMITTER_STOPPED");
     };
 
     // Auto-start emitter
@@ -343,7 +368,7 @@ export function buildRadarHtml(
           }
         }
 
-        if (peakBin > -1 && peakVal >= 12) {
+        if (peakBin > -1 && peakVal >= 8) {
           var peakFreq = peakBin * binSize;
           var snr = peakVal / noiseFloor;
 
@@ -355,7 +380,7 @@ export function buildRadarHtml(
           });
 
           // Ultrasonic carrier detected above threshold!
-          if (snr >= minSnr && peakVal >= 14) {
+          if (snr >= minSnr && peakVal >= 9) {
             finish({
               verified: true,
               reason: "DETECTED",

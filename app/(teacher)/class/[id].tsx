@@ -216,7 +216,7 @@ export default function TeacherClass() {
           ref={radarRef}
           mode="TEACHER_EMITTER"
           config={DEFAULT_ULTRASOUND}
-          active={ultrasoundEmitting}
+          active={Boolean(session || ultrasoundEmitting)}
         />
       </ScrollView>
     </SafeAreaView>
