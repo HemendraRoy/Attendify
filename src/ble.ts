@@ -8,13 +8,14 @@ import {
   isBluetoothEnabled,
   readCharacteristic,
   requestBluetoothPermission,
+  requestMTU,
   setServices,
   startAdvertising,
   startScan,
   stopAdvertising,
   stopScan
 } from 'react-native-bluetooth-ble';
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 
 export type BleConfig = {
   serviceUUID: string;
@@ -35,6 +36,11 @@ export type BleCandidate = {
   rssi?: number;
 };
 
+// Strips hyphens, non-hex characters and lowercases UUID for fail-safe comparison
+export function normalizeUuid(uuid?: string): string {
+  return (uuid || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+}
+
 // Converts ASCII / UTF-8 string to hex byte pairs (e.g. "a" -> "61")
 export function utf8ToHex(value: string): string {
   return Array.from(value, (char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('');
@@ -49,7 +55,16 @@ export function hexToUtf8(hex: string): string {
   return String.fromCharCode(...bytes);
 }
 
-// Robust token extractor from raw characteristic value (handles both { value: '...' } and raw string)
+// Independent per-operation timeout to prevent sequential task starvation
+export function withTimeout<T>(promise: Promise<T>, ms: number, opName: string): Promise<T> {
+  let timer: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${opName} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
+
+// Robust token extractor from characteristic value
 export function parseTokenFromCharacteristicValue(raw: unknown): string {
   if (!raw) return '';
 
@@ -62,39 +77,80 @@ export function parseTokenFromCharacteristicValue(raw: unknown): string {
     hexStr = String(raw);
   }
 
-  // Attempt 1: Hex-encoded UTF-8 string (from utf8ToHex)
-  const decodedUtf8 = hexToUtf8(hexStr).trim();
-  if (decodedUtf8 && /^[0-9a-fA-F]{16,64}$/.test(decodedUtf8)) {
+  const cleanHex = hexStr.trim();
+  if (!cleanHex) return '';
+
+  // Case 1: Raw token is 48 hex characters
+  if (cleanHex.length === 48 && /^[0-9a-fA-F]{48}$/.test(cleanHex)) {
+    return cleanHex;
+  }
+
+  // Case 2: UTF-8 encoded hex string (e.g. 96 hex digits representing 48 ASCII characters)
+  const decodedUtf8 = hexToUtf8(cleanHex).trim();
+  if (decodedUtf8.length === 48 && /^[0-9a-fA-F]{48}$/.test(decodedUtf8)) {
     return decodedUtf8;
   }
 
-  // Attempt 2: If the payload is already the raw hex token
-  const cleanRaw = hexStr.trim();
-  if (/^[0-9a-fA-F]{16,64}$/.test(cleanRaw)) {
-    return cleanRaw;
+  // Fallbacks for any token matching 16-64 hex chars
+  if (decodedUtf8 && /^[0-9a-fA-F]{16,64}$/.test(decodedUtf8)) {
+    return decodedUtf8;
+  }
+  if (/^[0-9a-fA-F]{16,64}$/.test(cleanHex)) {
+    return cleanHex;
   }
 
-  return decodedUtf8 || cleanRaw;
+  return decodedUtf8 || cleanHex;
 }
 
 export async function checkBleReady(): Promise<any> {
+  if (Platform.OS === 'android') {
+    const apiLevel = Number(Platform.Version);
+    console.log(`[BLE] Checking Android permissions (API level ${apiLevel})...`);
+
+    if (apiLevel >= 31) {
+      const perms = [
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+      ].filter(Boolean);
+
+      try {
+        const statuses = await PermissionsAndroid.requestMultiple(perms as any);
+        console.log('[BLE] Android 12+ runtime permissions status:', statuses);
+      } catch (err) {
+        console.warn('[BLE] PermissionsAndroid request error:', err);
+      }
+    } else {
+      try {
+        await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+        ]);
+      } catch (err) {
+        console.warn('[BLE] Location permission request error:', err);
+      }
+    }
+  }
+
   const granted = await requestBluetoothPermission();
-  console.log('[BLE] Permission granted:', granted);
+  console.log('[BLE] Library Bluetooth permission granted:', granted);
 
   if (!granted) {
-    throw new Error('Bluetooth permission was not granted. Please allow Bluetooth access in device settings.');
+    throw new Error('Bluetooth permission was not granted. Please allow Bluetooth and Location access in device settings.');
   }
 
   const enabled = await isBluetoothEnabled();
   console.log('[BLE] Bluetooth enabled:', enabled);
 
   if (!enabled) {
-    throw new Error('Bluetooth is turned off. Please enable Bluetooth on your device.');
+    throw new Error('Bluetooth is turned off. Please turn on Bluetooth on your device.');
   }
 
   try {
     const capabilities = await getCapabilities();
-    console.log('[BLE] Capabilities:', JSON.stringify(capabilities, null, 2));
+    console.log('[BLE] Device capabilities:', JSON.stringify(capabilities, null, 2));
     return capabilities;
   } catch {
     return null;
@@ -112,21 +168,35 @@ export async function startTeacherBeacon(
   console.log('[BLE][TEACHER] Characteristic UUID:', config.characteristicUUID);
   console.log('[BLE][TEACHER] Token length:', token.length);
 
-  await checkBleReady();
+  const capabilities = await checkBleReady();
+  if (capabilities && capabilities.supportsBlePeripheral === false) {
+    throw new Error('This device hardware does not support BLE Peripheral / Advertising mode.');
+  }
 
   // Clear previous listeners if any
   activeTeacherListeners.forEach(fn => { try { fn(); } catch {} });
   activeTeacherListeners = [];
 
-  const removeStarted = addEventListener('advertisingStarted', () => {
-    console.log('[BLE][TEACHER] ✅ Advertising started successfully');
-  });
+  const startPromise = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // If advertisingStartFailed did not fire within 3000ms, assume advertising is active
+      resolve();
+    }, 3000);
 
-  const removeFailed = addEventListener('advertisingStartFailed', (event: any) => {
-    console.error('[BLE][TEACHER] ❌ Advertising failed to start:', JSON.stringify(event, null, 2));
-  });
+    const removeStarted = addEventListener('advertisingStarted', () => {
+      clearTimeout(timer);
+      console.log('[BLE][TEACHER] ✅ Advertising started successfully');
+      resolve();
+    });
 
-  activeTeacherListeners.push(removeStarted, removeFailed);
+    const removeFailed = addEventListener('advertisingStartFailed', (event: any) => {
+      clearTimeout(timer);
+      console.error('[BLE][TEACHER] ❌ Advertising failed to start:', JSON.stringify(event, null, 2));
+      reject(new Error(`Bluetooth beacon failed to start (Code: ${event?.errorCode ?? 'unknown'})`));
+    });
+
+    activeTeacherListeners.push(removeStarted, removeFailed);
+  });
 
   try {
     // 1. Configure GATT Service & Characteristic with token value
@@ -151,7 +221,9 @@ export async function startTeacherBeacon(
       localName: config.deviceName || 'Attendify',
     });
 
-    console.log('[BLE][TEACHER] ✅ Advertising request sent');
+    console.log('[BLE][TEACHER] ✅ Advertising request sent, waiting for confirmation...');
+    await startPromise;
+    console.log('[BLE][TEACHER] 🚀 Teacher BLE Beacon is officially live');
   } catch (error) {
     console.error('[BLE][TEACHER] ❌ Error in startTeacherBeacon:', error);
     stopTeacherBeacon();
@@ -207,14 +279,16 @@ const connectionQueue = new BleConnectionQueue();
 
 export async function listenAndStartScan(
   onCandidate: (candidate: BleCandidate) => void | Promise<void>,
-  config: BleConfig = DEFAULT_BLE
+  config: BleConfig = DEFAULT_BLE,
+  onDiscovered?: (info: { totalScanned: number; matched: boolean; deviceName: string }) => void
 ): Promise<() => void> {
   await checkBleReady();
 
   const seenDeviceIds = new Set<string>();
+  let totalDiscoveredCount = 0;
   let isScanningActive = true;
 
-  const targetServiceUUID = config.serviceUUID.toLowerCase();
+  const targetServiceUUIDNorm = normalizeUuid(config.serviceUUID);
   const targetDeviceName = (config.deviceName || 'Attendify').toLowerCase();
 
   const removeDeviceListener = addDeviceFoundListener((device: any) => {
@@ -223,64 +297,79 @@ export async function listenAndStartScan(
     const deviceId: string = device.id;
     if (seenDeviceIds.has(deviceId)) return;
 
-    // Device matching logic:
-    // 1. Match by advertised serviceUUIDs
-    const advertisedUUIDs: string[] = (device.serviceUUIDs ?? []).map((u: string) => u.toLowerCase());
-    const hasServiceUUID = advertisedUUIDs.some((uuid: string) => uuid === targetServiceUUID);
+    totalDiscoveredCount += 1;
+    const rawName = String(device.name || device.localName || '');
+    const lowerName = rawName.toLowerCase();
+
+    // 1. Match by advertised serviceUUIDs (normalized comparison)
+    const advertisedUUIDs: string[] = device.serviceUUIDs ?? [];
+    const hasServiceUUID = advertisedUUIDs.some((uuid: string) => normalizeUuid(uuid) === targetServiceUUIDNorm);
 
     // 2. Match by localName or device name
-    const rawName = String(device.name || device.localName || '').toLowerCase();
-    const hasNameMatch = rawName.includes('attendify');
+    const hasNameMatch = lowerName.includes('attendify');
 
     // 3. Match by service data if available
-    const serviceData = device.serviceData ?? [];
+    const serviceData: any[] = device.serviceData ?? [];
     const hasServiceData = serviceData.some((entry: any) =>
-      entry?.uuid && entry.uuid.toLowerCase() === targetServiceUUID
+      entry?.uuid && normalizeUuid(entry.uuid) === targetServiceUUIDNorm
     );
 
     const isMatch = hasServiceUUID || hasNameMatch || hasServiceData;
+
+    console.log(`[BLE][SCAN] #${totalDiscoveredCount}: id=${deviceId}, name="${rawName}", UUIDs=${JSON.stringify(advertisedUUIDs)}, match=${isMatch}`);
+    onDiscovered?.({ totalScanned: totalDiscoveredCount, matched: isMatch, deviceName: rawName || 'Unknown Device' });
+
     if (!isMatch) return;
 
     seenDeviceIds.add(deviceId);
-    console.log(`[BLE][STUDENT] 🎯 Target candidate found: ${deviceId} (${device.name || device.localName || 'Unknown'})`);
+    console.log(`[BLE][STUDENT] 🎯 Target candidate found: ${deviceId} (${rawName || 'Unknown'})`);
 
     // Queue connection sequentially to avoid concurrent GATT operations
     connectionQueue.enqueue(async () => {
       if (!isScanningActive) return;
 
       let isConnected = false;
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('BLE Connection timed out')), 4500)
-      );
 
       try {
         console.log(`[BLE][STUDENT] Connecting to candidate: ${deviceId}...`);
-        await Promise.race([connect(deviceId), timeoutPromise]);
+        await withTimeout(connect(deviceId), 6000, 'BLE Connect');
         isConnected = true;
         console.log(`[BLE][STUDENT] ✅ Connected to: ${deviceId}`);
 
+        // Negotiate larger MTU for fast, complete characteristic payload transfer
+        try {
+          await withTimeout(requestMTU(deviceId, 256), 2000, 'MTU Exchange');
+          console.log(`[BLE][STUDENT] ✅ MTU negotiated for ${deviceId}`);
+        } catch (mtuErr) {
+          console.log(`[BLE][STUDENT] MTU request skipped/unsupported:`, mtuErr);
+        }
+
         // Discover services
-        await Promise.race([discoverServices(deviceId), timeoutPromise]);
+        console.log(`[BLE][STUDENT] Discovering services for: ${deviceId}...`);
+        await withTimeout(discoverServices(deviceId), 5000, 'Discover Services');
+        console.log(`[BLE][STUDENT] ✅ Services discovered`);
 
         // Read attendance characteristic
-        const rawValue = await Promise.race([
+        console.log(`[BLE][STUDENT] Reading characteristic ${config.characteristicUUID}...`);
+        const rawValue = await withTimeout(
           readCharacteristic(deviceId, config.serviceUUID, config.characteristicUUID),
-          timeoutPromise
-        ]);
+          5000,
+          'Read Characteristic'
+        );
 
-        console.log(`[BLE][STUDENT] Received characteristic value from ${deviceId}:`, rawValue);
+        console.log(`[BLE][STUDENT] Raw characteristic payload received:`, rawValue);
         const token = parseTokenFromCharacteristicValue(rawValue);
 
         if (token) {
-          console.log(`[BLE][STUDENT] ✅ Successfully parsed token: ${token.slice(0, 8)}...`);
+          console.log(`[BLE][STUDENT] ✅ Successfully parsed token (${token.length} chars): ${token.slice(0, 10)}...`);
           await onCandidate({
             deviceId,
             token,
-            name: device.name || device.localName,
+            name: rawName,
             rssi: device.rssi,
           });
         } else {
-          console.warn(`[BLE][STUDENT] ⚠️ Characteristic value could not be decoded as valid token`);
+          console.warn(`[BLE][STUDENT] ⚠️ Characteristic value could not be decoded as valid token:`, rawValue);
         }
       } catch (err: any) {
         console.warn(`[BLE][STUDENT] ⚠️ Failed reading candidate ${deviceId}:`, err?.message || err);
@@ -302,8 +391,6 @@ export async function listenAndStartScan(
   });
 
   try {
-    // Start scan without restrictive hardware filters so that phones advertising in background
-    // or with truncated 128-bit UUID packets are reliably discovered.
     startScan({
       allowDuplicates: false,
       scanMode: 'lowLatency',

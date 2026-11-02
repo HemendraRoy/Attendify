@@ -34,6 +34,7 @@ export async function verifyAndMarkAttendance(
   return new Promise<AttendanceResult>((resolve, reject) => {
     const seen = new Set<string>();
     let candidates = 0;
+    let totalBleScanned = 0;
     let done = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stopScanFn: (() => void) | undefined;
@@ -69,7 +70,7 @@ export async function verifyAndMarkAttendance(
       }
     };
 
-    // Overall timeout (9 seconds)
+    // Generous 25s timeout for complete discovery + connection + GATT read + ultrasound verification
     timeout = setTimeout(async () => {
       if (done) return;
 
@@ -92,94 +93,120 @@ export async function verifyAndMarkAttendance(
           message: 'Teacher BLE detected, but 20 kHz classroom ultrasound was not heard. You must be physically inside the room.'
         });
       } else {
+        const failureReason = totalBleScanned === 0
+          ? 'No Bluetooth devices detected nearby. Ensure Bluetooth is ON and permissions are allowed.'
+          : `Discovered ${totalBleScanned} nearby device(s), but none broadcasting an active Attendify session. Ensure teacher has clicked "Start Attendance".`;
+
         finish({
           marked: false,
           candidates,
           bleTokenFound: Boolean(acquiredToken),
           ultrasoundVerified: ultraResult.verified,
           ultrasoundDetails: ultraResult,
-          message: `No active classroom session locked. Scanned ${candidates} candidate device(s).`
+          message: failureReason
         });
       }
-    }, 9000);
+    }, 25000);
 
     // Launch BLE scan
     void (async () => {
       try {
-        stopScanFn = await listenAndStartScan(async (candidate: BleCandidate) => {
-          if (done || seen.has(candidate.deviceId)) return;
-          seen.add(candidate.deviceId);
-          candidates += 1;
-          acquiredToken = candidate.token;
+        stopScanFn = await listenAndStartScan(
+          async (candidate: BleCandidate) => {
+            if (done || seen.has(candidate.deviceId)) return;
+            seen.add(candidate.deviceId);
+            candidates += 1;
+            acquiredToken = candidate.token;
 
-          onProgress?.({
-            stage: 'BLE_FOUND',
-            message: `Beacon locked from teacher device. Verifying 20 kHz acoustic presence...`,
-            bleFound: true,
-            candidatesCount: candidates
-          });
-
-          // Wait for classroom ultrasound presence result
-          onProgress?.({
-            stage: 'VERIFYING_ULTRASOUND',
-            message: 'Analyzing 20 kHz acoustic spectrum for physical room presence...',
-            bleFound: true,
-            candidatesCount: candidates
-          });
-
-          let ultraResult: UltrasoundDetectionResult;
-          try {
-            ultraResult = await ultrasoundPromise;
-          } catch (e: any) {
-            ultraResult = { verified: false, reason: 'ERROR', details: e?.message };
-          }
-
-          if (!ultraResult.verified) {
-            console.warn('[ATTENDANCE] BLE token acquired, but Ultrasound room check failed:', ultraResult.reason);
-            finish({
-              marked: false,
-              candidates,
-              bleTokenFound: true,
-              ultrasoundVerified: false,
-              ultrasoundDetails: ultraResult,
-              message: 'Proxy Prevention Alert: Bluetooth signal detected through walls, but 20,000 Hz ultrasound acoustic presence was not detected. You must be inside the classroom.'
-            });
-            return;
-          }
-
-          onProgress?.({
-            stage: 'ULTRASOUND_VERIFIED',
-            message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB, 20 kHz). Submitting attendance...`,
-            bleFound: true,
-            ultrasoundVerified: true,
-            candidatesCount: candidates
-          });
-
-          // Submit to backend
-          try {
             onProgress?.({
-              stage: 'SUBMITTING',
-              message: 'Recording verified attendance on server...',
+              stage: 'BLE_FOUND',
+              message: `Beacon locked from teacher device (${candidate.name || candidate.deviceId}). Verifying acoustic presence...`,
+              bleFound: true,
+              candidatesCount: candidates
+            });
+
+            // Wait for classroom ultrasound presence result
+            onProgress?.({
+              stage: 'VERIFYING_ULTRASOUND',
+              message: 'Analyzing 20 kHz acoustic spectrum for physical room presence...',
+              bleFound: true,
+              candidatesCount: candidates
+            });
+
+            let ultraResult: UltrasoundDetectionResult;
+            try {
+              ultraResult = await ultrasoundPromise;
+            } catch (e: any) {
+              ultraResult = { verified: false, reason: 'ERROR', details: e?.message };
+            }
+
+            if (!ultraResult.verified) {
+              console.warn('[ATTENDANCE] BLE token acquired, but Ultrasound room check failed:', ultraResult.reason);
+              finish({
+                marked: false,
+                candidates,
+                bleTokenFound: true,
+                ultrasoundVerified: false,
+                ultrasoundDetails: ultraResult,
+                message: 'Proxy Prevention Alert: Bluetooth signal detected through walls, but 20,000 Hz ultrasound acoustic presence was not detected. You must be inside the classroom.'
+              });
+              return;
+            }
+
+            onProgress?.({
+              stage: 'ULTRASOUND_VERIFIED',
+              message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB, 20 kHz). Submitting attendance...`,
               bleFound: true,
               ultrasoundVerified: true,
               candidatesCount: candidates
             });
 
-            await api.markAttendance(classId, candidate.token, true);
+            // Submit to backend
+            try {
+              onProgress?.({
+                stage: 'SUBMITTING',
+                message: 'Recording verified attendance on server...',
+                bleFound: true,
+                ultrasoundVerified: true,
+                candidatesCount: candidates
+              });
 
-            finish({
-              marked: true,
-              candidates,
-              bleTokenFound: true,
-              ultrasoundVerified: true,
-              ultrasoundDetails: ultraResult,
-              message: 'Attendance verified and marked successfully via BLE + 20 kHz Ultrasound!'
-            });
-          } catch (err: any) {
-            console.warn('[ATTENDANCE] Submission error:', err?.message);
-            // This token might belong to another section or session
+              await api.markAttendance(classId, candidate.token, true);
+
+              finish({
+                marked: true,
+                candidates,
+                bleTokenFound: true,
+                ultrasoundVerified: true,
+                ultrasoundDetails: ultraResult,
+                message: 'Attendance verified and marked successfully via BLE + 20 kHz Ultrasound!'
+              });
+            } catch (err: any) {
+              console.warn('[ATTENDANCE] Submission error:', err?.message);
+              finish({
+                marked: false,
+                candidates,
+                bleTokenFound: true,
+                ultrasoundVerified: true,
+                ultrasoundDetails: ultraResult,
+                message: err?.message || 'Server rejected attendance submission'
+              }, err);
+            }
+          },
+          DEFAULT_BLE,
+          (info) => {
+            totalBleScanned = info.totalScanned;
+            if (!acquiredToken) {
+              onProgress?.({
+                stage: 'SCANNING_BLE',
+                message: info.matched
+                  ? `Found teacher beacon (${info.deviceName})! Connecting...`
+                  : `Scanning nearby classroom devices (${info.totalScanned} detected)...`,
+                candidatesCount: candidates
+              });
+            }
           }
-        }, DEFAULT_BLE);
+        );
       } catch (error) {
         finish({
           marked: false,

@@ -46,7 +46,7 @@ The system operates across two coordinated layers:
 ### Stage 1: Teacher Dual Broadcast
 - The teacher opens the class on the app and taps **"Start Attendance"**.
 - The backend generates a secure 32-character dynamic token (hashed in PostgreSQL with a configurable TTL, e.g., 120 seconds).
-- The teacher's phone starts a **Bluetooth Low Energy (BLE) GATT server** advertising service `0000ffe0-0000-1000-8000-00805f9b34fb`.
+- The teacher's phone starts a **Bluetooth Low Energy (BLE) GATT server** advertising service `7d9d5b6d-b5f6-4f7a-8f07-a4fae2d9d0a1`.
 - Simultaneously, the teacher's phone speaker emits an **inaudible 20,000 Hz continuous sine wave** with raised-cosine windowing to prevent speaker pop artifacts.
 
 ### Stage 2: Classroom Physical Boundary (The Acoustic Shield)
