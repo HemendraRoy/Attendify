@@ -215,13 +215,26 @@ export async function startTeacherBeacon(
       },
     ]);
 
-    // 2. Start advertising with service UUID and compact localName (ATTEND_XXXXXX)
+    // 2. Start advertising with service UUID, localName, manufacturerData, and serviceData128
+    const hexToken = utf8ToHex(token);
     startAdvertising({
       serviceUUIDs: [config.serviceUUID],
       localName: `ATTEND_${token}`,
+      manufacturerData: `ffff${hexToken}`,
+      advertisingData: {
+        completeLocalName: `ATTEND_${token}`,
+        shortenedLocalName: `ATT_${token}`,
+        manufacturerData: `ffff${hexToken}`,
+        serviceData128: [
+          {
+            uuid: config.serviceUUID,
+            data: hexToken,
+          },
+        ],
+      },
     });
 
-    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATTEND_${token}), waiting for confirmation...`);
+    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATTEND_${token} + manufacturerData + serviceData128), waiting for confirmation...`);
     await startPromise;
     console.log('[BLE][TEACHER] 🚀 Teacher BLE Beacon is officially live');
   } catch (error) {
@@ -301,39 +314,63 @@ export async function listenAndStartScan(
     const rawName = String(device.name || device.localName || '');
     const lowerName = rawName.toLowerCase();
 
-    // 1. Match by advertised serviceUUIDs (normalized comparison)
+    // 1. Check if token can be extracted directly from Service Data
+    let extractedToken: string | null = null;
+    const serviceData: any[] = device.serviceData ?? [];
+    for (const entry of serviceData) {
+      if (entry?.uuid && normalizeUuid(entry.uuid) === targetServiceUUIDNorm && entry?.data) {
+        const decoded = hexToUtf8(entry.data).trim();
+        if (/^[0-9a-zA-Z]{4,16}$/.test(decoded)) {
+          extractedToken = decoded;
+          break;
+        }
+      }
+    }
+
+    // 2. Check if token can be extracted from Manufacturer Data
+    if (!extractedToken && device.manufacturerData) {
+      const rawM = String(device.manufacturerData);
+      const payloadHex = rawM.length > 4 && rawM.startsWith('ffff') ? rawM.slice(4) : rawM;
+      const decodedM = hexToUtf8(payloadHex).trim() || hexToUtf8(rawM).trim();
+      if (/^[0-9a-zA-Z]{4,16}$/.test(decodedM)) {
+        extractedToken = decodedM;
+      }
+    }
+
+    // 3. Check if token can be extracted from device name / localName
+    if (!extractedToken) {
+      const directCodeMatch = rawName.match(/(?:ATT-|ATTEND_)([0-9a-zA-Z]{4,12})/i);
+      if (directCodeMatch) {
+        extractedToken = directCodeMatch[1];
+      }
+    }
+
+    // 4. Match by advertised serviceUUIDs
     const advertisedUUIDs: string[] = device.serviceUUIDs ?? [];
     const hasServiceUUID = advertisedUUIDs.some((uuid: string) => normalizeUuid(uuid) === targetServiceUUIDNorm);
-
-    // 2. Match by localName or device name (matches ATTEND_ or ATT-)
     const hasAttPrefix = /(?:ATT-|ATTEND_)[0-9a-zA-Z]+/i.test(rawName);
     const hasNameMatch = lowerName.includes('attendify') || hasAttPrefix;
-
-    // 3. Match by service data if available
-    const serviceData: any[] = device.serviceData ?? [];
     const hasServiceData = serviceData.some((entry: any) =>
       entry?.uuid && normalizeUuid(entry.uuid) === targetServiceUUIDNorm
     );
 
-    const isMatch = hasServiceUUID || hasNameMatch || hasServiceData || hasAttPrefix;
+    const isMatch = Boolean(extractedToken) || hasServiceUUID || hasNameMatch || hasServiceData;
 
-    console.log(`[BLE][SCAN] #${totalDiscoveredCount}: id=${deviceId}, name="${rawName}", UUIDs=${JSON.stringify(advertisedUUIDs)}, match=${isMatch}`);
-    onDiscovered?.({ totalScanned: totalDiscoveredCount, matched: isMatch, deviceName: rawName || 'Unknown Device' });
+    console.log(`[BLE][SCAN] #${totalDiscoveredCount}: id=${deviceId}, name="${rawName}", match=${isMatch}, token=${extractedToken || 'none'}`);
+    onDiscovered?.({ totalScanned: totalDiscoveredCount, matched: isMatch, deviceName: rawName || 'Device' });
 
     if (!isMatch) return;
 
     seenDeviceIds.add(deviceId);
     console.log(`[BLE][STUDENT] 🎯 Target candidate found: ${deviceId} (${rawName || 'Unknown'})`);
 
-    // FAST-LOCK: If device name contains ATTEND_XXXXXX or ATT-XXXXXX, extract code directly with zero GATT latency
-    const directCodeMatch = rawName.match(/(?:ATT-|ATTEND_)([0-9a-zA-Z]{4,12})/i);
-    if (directCodeMatch) {
-      const broadcastCode = directCodeMatch[1];
-      console.log(`[BLE][STUDENT] 🚀 FAST-LOCK: Extracted attendance code "${broadcastCode}" directly from BLE advertisement!`);
+    // FAST-LOCK: If token was received in advertisement packet, lock instantly without GATT
+    if (extractedToken) {
+      console.log(`[BLE][STUDENT] 🚀 FAST-LOCK: Extracted attendance token "${extractedToken}" directly from broadcast packet!`);
       void onCandidate({
         deviceId,
-        token: broadcastCode,
-        name: rawName,
+        token: extractedToken,
+        name: rawName || 'Attendify Teacher Beacon',
         rssi: device.rssi,
       });
       return;
@@ -407,7 +444,7 @@ export async function listenAndStartScan(
 
   try {
     startScan({
-      allowDuplicates: false,
+      allowDuplicates: true,
       scanMode: 'lowLatency',
     });
     console.log('[BLE][STUDENT] 🔍 BLE scanner started');

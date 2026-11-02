@@ -62,8 +62,8 @@ export default function StudentClass() {
 
       const result = await verifyAndMarkAttendance(id!, ultrasoundPromise, (progress) => {
         setStatusMessage(progress.message);
-        if (progress.bleFound) setBleDetected(true);
-        if (progress.ultrasoundVerified) setUltrasoundVerified(true);
+        if (progress.bleFound !== undefined) setBleDetected(progress.bleFound);
+        if (progress.ultrasoundVerified !== undefined) setUltrasoundVerified(progress.ultrasoundVerified);
       });
 
       if (result.marked) {
