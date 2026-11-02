@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
+import { router } from 'expo-router';
 import { api, type User } from './api';
 
 type AuthContextValue = {
@@ -44,6 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut: async () => {
           await SecureStore.deleteItemAsync('access_token');
           setUser(null);
+          router.replace('/(auth)/login');
         }
       }}
     >

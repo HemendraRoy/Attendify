@@ -104,7 +104,21 @@ export default function TeacherClass() {
     <SafeAreaView style={s.container}>
       <ScrollView contentContainerStyle={s.content}>
         <Text style={s.title}>{data.name}</Text>
-        <Text style={s.muted}>{data.subject || 'Class'} · Join code {data.joinCode}</Text>
+        {data.subject ? <Text style={s.subject}>{data.subject}</Text> : null}
+
+        <View style={s.idCard}>
+          <View style={s.idRow}>
+            <Text style={s.idLabel}>CLASS ID:</Text>
+            <Text style={s.idValue} selectable>{data.id}</Text>
+          </View>
+          <View style={s.idRow}>
+            <Text style={s.idLabel}>JOIN CODE:</Text>
+            <Text style={s.codeValueSmall} selectable>{data.joinCode}</Text>
+          </View>
+          <Text style={s.idHelp}>
+            Share this Class ID and Join Code with students so they can join this class.
+          </Text>
+        </View>
 
         <View style={s.row}>
           <Pressable style={s.secondary} onPress={() => router.push(`/(teacher)/class/${id}/requests`)}>
@@ -203,6 +217,52 @@ const s = StyleSheet.create({
   content: { padding: 20, gap: 14 },
   loading: { padding: 20, color: '#666' },
   title: { fontSize: 32, fontWeight: '800' },
+  subject: { color: '#6b7280', fontSize: 16, marginTop: -6, marginBottom: 2 },
+  idCard: {
+    backgroundColor: '#ffffff',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    gap: 8,
+  },
+  idRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  idLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#4b5563',
+    letterSpacing: 0.5,
+  },
+  idValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+    fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
+    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  codeValueSmall: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#2563eb',
+    letterSpacing: 2,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  idHelp: {
+    fontSize: 11,
+    color: '#9ca3af',
+    marginTop: 2,
+  },
   muted: { color: '#666', fontSize: 14 },
   row: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   primary: { backgroundColor: '#111', padding: 14, borderRadius: 14, paddingHorizontal: 18 },

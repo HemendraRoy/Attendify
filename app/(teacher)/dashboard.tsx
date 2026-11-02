@@ -75,7 +75,10 @@ export default function TeacherDashboard() {
               {c.subject || 'Class'}
               {c.schedule ? ` · ${c.schedule}` : ''}
             </Text>
-            <Text style={s.code}>{c.joinCode}</Text>
+            <View style={s.badgeRow}>
+              <Text style={s.idBadge}>ID: {c.id}</Text>
+              <Text style={s.codeBadge}>JOIN: {c.joinCode}</Text>
+            </View>
           </Pressable>
         ))}
 
@@ -146,8 +149,29 @@ const s = StyleSheet.create({
   muted: {
     color: '#666',
   },
-  code: {
+  badgeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
+  idBadge: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#374151',
+    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  codeBadge: {
+    fontSize: 12,
     fontWeight: '800',
-    marginTop: 4,
+    color: '#1d4ed8',
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    letterSpacing: 1,
   },
 });

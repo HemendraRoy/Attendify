@@ -15,6 +15,7 @@ export default function Login() {
   const { signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
@@ -49,14 +50,23 @@ export default function Login() {
           onChangeText={setEmail}
         />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#8A8A8A"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
+        <View style={styles.passwordRow}>
+          <TextInput
+            style={[styles.input, styles.passwordInput]}
+            placeholder="Password"
+            placeholderTextColor="#8A8A8A"
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+          />
+          <Pressable
+            style={styles.eyeBtn}
+            onPress={() => setShowPassword((prev) => !prev)}
+            hitSlop={10}
+          >
+            <Text style={styles.eyeText}>{showPassword ? 'Hide' : 'Show'}</Text>
+          </Pressable>
+        </View>
 
         <Pressable style={styles.button} onPress={submit} disabled={loading}>
           <Text style={styles.buttonText}>
@@ -102,6 +112,29 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     borderRadius: 14,
     padding: 14,
+    color: '#111',
+    backgroundColor: '#fff',
+    fontSize: 16,
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  passwordInput: {
+    flex: 1,
+    paddingRight: 60,
+  },
+  eyeBtn: {
+    position: 'absolute',
+    right: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  eyeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4f46e5',
   },
   button: {
     backgroundColor: '#111',

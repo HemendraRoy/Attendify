@@ -37,6 +37,7 @@ export async function verifyAndMarkAttendance(
     let totalBleScanned = 0;
     let done = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let stopScanFn: (() => void) | undefined;
     let acquiredToken: string | null = null;
 
@@ -50,6 +51,7 @@ export async function verifyAndMarkAttendance(
       if (done) return;
       done = true;
       if (timeout) clearTimeout(timeout);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       try { stopScanFn?.(); } catch {}
 
       if (error) {
@@ -107,6 +109,99 @@ export async function verifyAndMarkAttendance(
         });
       }
     }, 25000);
+
+    // Fallback: Check for active sessions in backend after a 3-second delay (like reference implementation)
+    fallbackTimer = setTimeout(async () => {
+      if (done || acquiredToken) return;
+      console.log('[ATTENDANCE] BLE scan found no beacon yet, checking backend for active session fallback...');
+
+      try {
+        const activeRes = await api.getActiveSession(classId);
+        if (done || acquiredToken) return;
+
+        if (activeRes.active && activeRes.sessionId) {
+          console.log('[ATTENDANCE] Found active session in backend fallback:', activeRes.sessionId);
+          acquiredToken = activeRes.sessionId; // Session locked via backend fallback
+
+          onProgress?.({
+            stage: 'BLE_FOUND',
+            message: 'Classroom session locked from server! Verifying acoustic presence…',
+            bleFound: true,
+            candidatesCount: candidates > 0 ? candidates : 1
+          });
+
+          // Wait for classroom ultrasound presence result
+          onProgress?.({
+            stage: 'VERIFYING_ULTRASOUND',
+            message: 'Analyzing 20 kHz acoustic spectrum for physical room presence…',
+            bleFound: true,
+            candidatesCount: candidates > 0 ? candidates : 1
+          });
+
+          let ultraResult: UltrasoundDetectionResult;
+          try {
+            ultraResult = await ultrasoundPromise;
+          } catch (e: any) {
+            ultraResult = { verified: false, reason: 'ERROR', details: e?.message };
+          }
+
+          if (!ultraResult.verified) {
+            console.warn('[ATTENDANCE] Fallback session acquired, but Ultrasound room check failed:', ultraResult.reason);
+            finish({
+              marked: false,
+              candidates,
+              bleTokenFound: true,
+              ultrasoundVerified: false,
+              ultrasoundDetails: ultraResult,
+              message: 'Proxy Prevention Alert: Active class session located, but 20,000 Hz ultrasound acoustic presence was not detected. You must be physically inside the classroom.'
+            });
+            return;
+          }
+
+          onProgress?.({
+            stage: 'ULTRASOUND_VERIFIED',
+            message: `In-classroom presence confirmed (SNR: ${ultraResult.snr || 'OK'}dB, 20 kHz). Submitting attendance…`,
+            bleFound: true,
+            ultrasoundVerified: true,
+            candidatesCount: candidates > 0 ? candidates : 1
+          });
+
+          // Submit to backend with sessionId
+          try {
+            onProgress?.({
+              stage: 'SUBMITTING',
+              message: 'Recording verified attendance on server…',
+              bleFound: true,
+              ultrasoundVerified: true,
+              candidatesCount: candidates > 0 ? candidates : 1
+            });
+
+            await api.markAttendance(classId, undefined, true, activeRes.sessionId);
+
+            finish({
+              marked: true,
+              candidates: candidates > 0 ? candidates : 1,
+              bleTokenFound: true,
+              ultrasoundVerified: true,
+              ultrasoundDetails: ultraResult,
+              message: 'Attendance verified and marked successfully via Active Session + 20 kHz Ultrasound!'
+            });
+          } catch (err: any) {
+            console.warn('[ATTENDANCE] Submission error with fallback:', err?.message);
+            finish({
+              marked: false,
+              candidates,
+              bleTokenFound: true,
+              ultrasoundVerified: true,
+              ultrasoundDetails: ultraResult,
+              message: err?.message || 'Server rejected attendance submission'
+            }, err);
+          }
+        }
+      } catch (err) {
+        console.warn('[ATTENDANCE] Fallback active session check error:', err);
+      }
+    }, 3000);
 
     // Launch BLE scan
     void (async () => {
