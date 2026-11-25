@@ -2,7 +2,7 @@ import type { AcousticBroadcast } from './ultrasound';
 import type { AcousticSubmission, VerificationSource } from './verification';
 import * as SecureStore from 'expo-secure-store';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
+const API_URL = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/+$/, '');
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!API_URL) throw new Error('Set EXPO_PUBLIC_API_URL to the updated Attendify backend and rebuild the app.');
@@ -126,6 +126,7 @@ export const api = {
       active: boolean;
       sessionId?: string;
       alreadyMarked?: boolean;
+      recordedByDashboard?: boolean;
       expiresAt?: string;
     }>(`/attendance/classes/${classId}/active`, { signal }),
 
@@ -223,6 +224,7 @@ export type AttendanceSession = {
 export type AttendanceRow = {
   id: string;
   markedAt: string;
+  recordedByDashboard?: boolean;
   student?: Pick<User, 'id' | 'name' | 'email'>;
 };
 

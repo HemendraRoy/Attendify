@@ -11,11 +11,15 @@ export type AcousticSubmission = { classId: string; sessionId: string; bleToken?
 export type VerificationDependencies = {
   ensureBluetoothReady: () => Promise<unknown>;
   bluetoothEnabled: () => Promise<boolean>;
-  getActiveSession: (classId: string, signal: AbortSignal) => Promise<{ active: boolean; sessionId?: string; alreadyMarked?: boolean }>;
+  getActiveSession: (classId: string, signal: AbortSignal) => Promise<{ active: boolean; sessionId?: string; alreadyMarked?: boolean; recordedByDashboard?: boolean }>;
   startListening: () => { result: Promise<UltrasoundDetectionResult>; stop: () => void };
   startScan: (receive: (candidate: { token: string }) => void) => Promise<() => void>;
-  markAttendance: (submission: AcousticSubmission, signal: AbortSignal) => Promise<{ verificationMethod: VerificationSource }>;
+  markAttendance: (submission: AcousticSubmission, signal: AbortSignal) => Promise<{ verificationMethod: VerificationSource; attendance?: { recordedByDashboard?: boolean } }>;
 };
+
+function dashboardResult(sessionId: string) {
+  return { marked: true as const, sessionId, source: 'DASHBOARD' as const };
+}
 
 /** One run owns its microphone, BLE scan, deadline, and at most one POST. */
 export async function runVerification(classId: string, deps: VerificationDependencies, options: {
@@ -66,7 +70,10 @@ export async function runVerification(classId: string, deps: VerificationDepende
     }, 500);
     const active = await bounded(deps.getActiveSession(classId, signal));
     if (!active.active || !active.sessionId) throw new Error('No active attendance session was found for this class');
-    if (active.alreadyMarked) throw new Error('Attendance is already recorded for this session');
+    if (active.alreadyMarked) {
+      if (active.recordedByDashboard) return dashboardResult(active.sessionId);
+      throw new Error('Attendance is already recorded for this session');
+    }
     if (!await bounded(deps.bluetoothEnabled())) throw new Error('Bluetooth was switched off. Turn it on and scan again.');
     const capture = deps.startListening();
     stopAudio = capture.stop;
@@ -103,9 +110,10 @@ export async function runVerification(classId: string, deps: VerificationDepende
     const response = await bounded(deps.markAttendance({
       classId, sessionId: active.sessionId, ...(bleToken ? { bleToken } : {}), acousticToken: acoustic.decodedToken!
     }, signal));
+    if (response.attendance?.recordedByDashboard) return dashboardResult(active.sessionId);
     if (response.verificationMethod !== source) throw new Error('The server returned an incompatible verification result. Update the app and backend together.');
     progress('COMPLETED', source === 'BLE_ACOUSTIC' ? 'Attendance recorded using BLE and the acoustic challenge.' : 'Attendance recorded using the acoustic challenge and server-session fallback.', true);
-    return { marked: true as const, bleTokenFound: Boolean(bleToken), ultrasoundVerified: true as const, source, ultrasoundDetails: acoustic };
+    return { marked: true as const, sessionId: active.sessionId, bleTokenFound: Boolean(bleToken), ultrasoundVerified: true as const, source, ultrasoundDetails: acoustic };
   } finally {
     if (timeout) clearTimeout(timeout);
     if (preferenceTimer) clearTimeout(preferenceTimer);

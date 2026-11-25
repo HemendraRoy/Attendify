@@ -25,6 +25,31 @@ test('Bluetooth off or permission denial prevents microphone, scan and submissio
   assert.equal(f.calls.listening, 0); assert.equal(f.calls.scan, 0); assert.equal(f.calls.posts.length, 0);
 });
 
+test('an existing browser check-in completes without starting the sensors or submitting', async () => {
+  const f = fixture();
+  f.deps.getActiveSession = async () => ({
+    active: true, sessionId: 'session-A', alreadyMarked: true, recordedByDashboard: true,
+  });
+  const result = await runVerification('class-A', f.deps, limits);
+  assert.deepEqual(result, { marked: true, sessionId: 'session-A', source: 'DASHBOARD' });
+  assert.equal(f.calls.listening, 0);
+  assert.equal(f.calls.scan, 0);
+  assert.equal(f.calls.posts.length, 0);
+});
+
+test('a browser check-in that wins during submission keeps its original source', async () => {
+  const f = fixture();
+  f.deps.markAttendance = async () => ({
+    verificationMethod: 'ACOUSTIC_FALLBACK', attendance: { recordedByDashboard: true },
+  });
+  const progress: VerificationProgress[] = [];
+  const result = await runVerification('class-A', f.deps, { ...limits, onProgress: update => progress.push(update) });
+  assert.equal(result.source, 'DASHBOARD');
+  assert.equal(progress.some(update => update.stage === 'COMPLETED'), false);
+  assert.equal(f.calls.stoppedAudio, 1);
+  assert.equal(f.calls.stoppedBle, 1);
+});
+
 test('real BLE token plus a complete sound packet submits exactly once', async () => {
   const f = fixture();
   f.deps.startScan = async receive => {
@@ -90,7 +115,7 @@ test('late BLE callback cannot change an in-flight fallback submission or its re
     return { verificationMethod: 'ACOUSTIC_FALLBACK' };
   };
   const result = await runVerification('class-A', f.deps, limits);
-  assert.equal(result.bleTokenFound, false); assert.equal(result.source, 'ACOUSTIC_FALLBACK'); assert.equal(f.calls.posts.length, 1);
+  assert.equal(result.source, 'ACOUSTIC_FALLBACK'); assert.equal(result.bleTokenFound, false); assert.equal(f.calls.posts.length, 1);
 });
 
 test('deadline releases audio and BLE without submitting', async () => {

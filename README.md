@@ -53,6 +53,16 @@ npm run test:audio-browser  # Optional: requires Chromium/Brave; uses synthetic 
 
 For an Android debug APK, set ANDROID_HOME to your permanent SDK location and run `android/gradlew :app:assembleDebug` from the android directory. Debug builds require Metro; use an appropriate embedded-bundle build for a standalone presentation. Do not use the old checked-in APK as evidence of this branch's behaviour.
 
+## Android preview for browser check-ins
+
+Set `EXPO_PUBLIC_API_URL` in the Expo `preview` environment to the staging backend's public HTTPS origin, without the `/health` path. Confirm `/health` returns `acousticProtocol: "chirp-v1"` and the staging backend serves `/dev/attendance`. Both phones and the browser dashboard use that backend.
+
+```sh
+eas build --platform android --profile preview
+```
+
+The preview APK includes the student confirmation for teacher dashboard check-ins and runs without Metro. The Expo build rejects missing or local API URLs and excludes local dotenv files from the upload. For a direct local Android release build, verify the exported endpoint first with `npm run check:preview-url` and set `EXPO_PUBLIC_ATTENDIFY_BROWSER_CONFIRMATION=1` when bundling.
+
 ## Backend contract
 
 Teacher start/current-session responses include `acoustic: { protocol: "chirp-v1", token: "16 hexadecimal characters", validUntil: "ISO timestamp" }`. Only the owning teacher can read these responses.
