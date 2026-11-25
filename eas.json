@@ -1,13 +1,18 @@
 {
   "build": {
     "preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_ATTENDIFY_BROWSER_CONFIRMATION": "1"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
       "android": {
-        "buildType": "app-bundle" 
+        "buildType": "app-bundle"
       }
     }
   }

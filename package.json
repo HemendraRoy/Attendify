@@ -9,6 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "postinstall": "node scripts/patch-webview.js && node scripts/patch-expo-dev-menu.cjs && node scripts/build-acoustic-runtime.cjs",
+    "eas-build-pre-install": "node scripts/check-preview-api-url.cjs --eas",
+    "check:preview-url": "node scripts/check-preview-api-url.cjs",
     "test": "node scripts/build-acoustic-runtime.cjs --check && node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "acoustic:generate": "node scripts/build-acoustic-runtime.cjs",

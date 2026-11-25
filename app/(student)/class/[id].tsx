@@ -9,32 +9,37 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { UltrasoundRadar } from '@/UltrasoundRadar';
 import { DEFAULT_ULTRASOUND, type UltrasoundDetectionResult, type RadarTelemetry } from '@/ultrasound';
 
+const browserCheckInEnabled = __DEV__ || process.env.EXPO_PUBLIC_ATTENDIFY_BROWSER_CONFIRMATION === '1';
+const dashboardConfirmationMessage = 'Your attendance for this session is confirmed.';
+
 type DeveloperAttendanceAction = (classId: string, controller: AbortController) => Promise<void>;
 
 function useAttendanceDevMenu(classId: string | undefined, runDeveloperAttendance: DeveloperAttendanceAction) {
   useFocusEffect(useCallback(() => {
     if (!__DEV__ || Platform.OS === 'web' || !classId) return;
 
-    const controller = new AbortController();
-    let fetching = false;
+    let focused = true;
+    let currentRun: AbortController | undefined;
     void registerDevMenuItems([{
       name: 'X',
       shouldCollapse: true,
       callback: async () => {
-        if (fetching || controller.signal.aborted) return;
-        fetching = true;
+        if (!focused || currentRun) return;
+        const controller = new AbortController();
+        currentRun = controller;
         try {
           await runDeveloperAttendance(classId, controller);
         } catch (error) {
           if (!controller.signal.aborted) console.warn('[STUDENT][DEV] Developer attendance failed:', error);
         } finally {
-          fetching = false;
+          currentRun = undefined;
         }
       },
     }]).catch(error => console.warn('Could not register attendance dev menu item', error));
 
     return () => {
-      controller.abort();
+      focused = false;
+      currentRun?.abort();
       void registerDevMenuItems([]).catch(error => console.warn('Could not clear attendance dev menu item', error));
     };
   }, [classId, runDeveloperAttendance]));
@@ -54,6 +59,12 @@ export default function StudentClass() {
   const scanController = useRef<AbortController | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
   const [serverTokenAttendance, setServerTokenAttendance] = useState(false);
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  const [dashboardConfirmation, setDashboardConfirmation] = useState<{ classId: string; sessionId: string } | null>(null);
+  const lastConfirmedSession = useRef<string | null>(null);
+  const classId = data?.id === id ? id : undefined;
+  const markedFromDashboard = !!classId && dashboardConfirmation?.classId === classId && !scanning;
+  const attendanceRecorded = isSuccess || markedFromDashboard;
 
   // Microphone Diagnostic Test state
   const [testingMic, setTestingMic] = useState(false);
@@ -129,19 +140,67 @@ export default function StudentClass() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
+      setForeground(state === 'active');
       if (state === 'background') {
+        if (scanController.current) setStatusMessage('Scan cancelled. Keep the app open while checking in.');
         scanController.current?.abort();
         setTestingMic(false);
         setListening(false);
         setScanning(false);
-        setStatusMessage('Scan cancelled. Keep the app open while checking in.');
       }
     });
     return () => subscription.remove();
   }, []);
 
+  const confirmDashboardAttendance = useCallback((confirmedClassId: string, sessionId: string) => {
+    if (lastConfirmedSession.current === sessionId) return;
+
+    lastConfirmedSession.current = sessionId;
+    scanController.current?.abort();
+    setListening(false);
+    setTestingMic(false);
+    setScanning(false);
+    setIsSuccess(false);
+    setStatusMessage('');
+    setDashboardConfirmation({ classId: confirmedClassId, sessionId });
+    Alert.alert('Attendance recorded', dashboardConfirmationMessage);
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    if (!classId || !foreground || !browserCheckInEnabled || Platform.OS === 'web') return;
+
+    const controller = new AbortController();
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const session = await api.getActiveSession(classId, controller.signal);
+        if (controller.signal.aborted || !session.sessionId) return;
+
+        const sessionId = session.sessionId;
+        if (!session.recordedByDashboard) {
+          setDashboardConfirmation(current => current?.sessionId === sessionId ? current : null);
+          return;
+        }
+
+        confirmDashboardAttendance(classId, sessionId);
+      } catch {
+        // A failed background status check should not interrupt a student.
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = setInterval(poll, 2000);
+    void poll();
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
+  }, [classId, foreground, confirmDashboardAttendance]));
+
   const scan = async () => {
-    if (scanController.current) return;
+    if (!classId || scanController.current) return;
     const controller = new AbortController();
     scanController.current = controller;
     setTestingMic(false);
@@ -153,7 +212,7 @@ export default function StudentClass() {
     setLiveTelemetry(null);
     setStatusMessage('Checking Bluetooth and permissions…');
     try {
-      const result = await verifyAndMarkAttendance(id!, () => {
+      const result = await verifyAndMarkAttendance(classId, () => {
         const result = new Promise<UltrasoundDetectionResult>(resolve => { ultrasoundResolverRef.current = resolve; });
         setAudioRun(++audioRunRef.current);
         setListening(true);
@@ -169,6 +228,11 @@ export default function StudentClass() {
         setUltrasoundVerified(progress.ultrasoundVerified);
       } });
       if (!controller.signal.aborted && result.marked) {
+        if (result.source === 'DASHBOARD') {
+          confirmDashboardAttendance(classId, result.sessionId);
+          return;
+        }
+        lastConfirmedSession.current = result.sessionId;
         setIsSuccess(true);
         Alert.alert('Attendance recorded', result.source === 'BLE_ACOUSTIC'
           ? 'The server verified the BLE token and current classroom sound challenge.'
@@ -212,6 +276,10 @@ export default function StudentClass() {
         acousticToken: code.acoustic.token,
       }, controller.signal);
       if (controller.signal.aborted) return;
+      if (result.attendance.recordedByDashboard) {
+        confirmDashboardAttendance(classId, code.sessionId);
+        return;
+      }
       const usedBle = result.verificationMethod === 'BLE_ACOUSTIC';
       const completionMessage = usedBle
         ? 'Attendance recorded using BLE and the acoustic challenge.'
@@ -219,6 +287,7 @@ export default function StudentClass() {
       const confirmationMessage = usedBle
         ? 'The server verified the BLE token and current classroom sound challenge.'
         : 'The server verified the classroom sound challenge using session fallback. No BLE token was received.';
+      lastConfirmedSession.current = code.sessionId;
       setBleDetected(usedBle);
       setUltrasoundVerified(true);
       setIsSuccess(true);
@@ -235,9 +304,9 @@ export default function StudentClass() {
       setListening(false);
       setScanning(false);
     }
-  }, []);
+  }, [confirmDashboardAttendance]);
 
-  useAttendanceDevMenu(data?.id === id ? id : undefined, runDeveloperAttendance);
+  useAttendanceDevMenu(classId, runDeveloperAttendance);
 
   if (!data) {
     return (
@@ -257,14 +326,14 @@ export default function StudentClass() {
         </Text>
 
         <Pressable
-          style={[s.button, scanning && s.buttonScanning, isSuccess && s.buttonSuccess]}
+          style={[s.button, scanning && s.buttonScanning, attendanceRecorded && s.buttonSuccess]}
           onPress={scan}
-          disabled={scanning}
+          disabled={scanning || markedFromDashboard}
         >
           <Text style={s.buttonText}>
             {scanning
               ? 'Verifying Classroom Presence…'
-              : isSuccess
+              : attendanceRecorded
                 ? '✓ Attendance Recorded'
                 : 'Scan & Mark Attendance'}
           </Text>
@@ -325,34 +394,38 @@ export default function StudentClass() {
         )}
 
         {/* Verification Status Card */}
-        {(scanning || statusMessage.length > 0) && (
-          <View style={[s.statusCard, isSuccess && s.statusCardSuccess]}>
+        {(scanning || statusMessage.length > 0 || markedFromDashboard) && (
+          <View style={[s.statusCard, attendanceRecorded && s.statusCardSuccess]}>
             <Text style={s.statusTitle}>
-              {isSuccess ? 'Verification Complete' : 'Verification Telemetry'}
+              {attendanceRecorded ? 'Verification Complete' : 'Verification Telemetry'}
             </Text>
-            <Text style={s.statusMsg}>{statusMessage}</Text>
+            <Text style={s.statusMsg}>{markedFromDashboard ? dashboardConfirmationMessage : statusMessage}</Text>
 
             <View style={s.checksList}>
               <View style={s.checkRow}>
                 <Text style={s.checkIcon}>
-                  {bleDetected ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
+                  {markedFromDashboard || bleDetected ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
                 </Text>
-                <Text style={[s.checkLabel, bleDetected && s.checkLabelActive]}>
-                  {`BLE Token: ${bleDetected ? 'Received' : scanning && !serverTokenAttendance ? 'Searching…' : 'Not received'}`}
+                <Text style={[s.checkLabel, (markedFromDashboard || bleDetected) && s.checkLabelActive]}>
+                  {markedFromDashboard
+                    ? 'Attendance: Recorded'
+                    : `BLE Token: ${bleDetected ? 'Received' : scanning && !serverTokenAttendance ? 'Searching…' : 'Not received'}`}
                 </Text>
               </View>
 
               <View style={s.checkRow}>
                 <Text style={s.checkIcon}>
-                  {ultrasoundVerified ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
+                  {markedFromDashboard || ultrasoundVerified ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
                 </Text>
-                <Text style={[s.checkLabel, ultrasoundVerified && s.checkLabelActive]}>
-                  {`Sound Packet: ${ultrasoundVerified ? 'Decoded' : scanning && !serverTokenAttendance ? 'Listening…' : 'Not decoded'}`}
+                <Text style={[s.checkLabel, (markedFromDashboard || ultrasoundVerified) && s.checkLabelActive]}>
+                  {markedFromDashboard
+                    ? 'Session: Confirmed'
+                    : `Sound Packet: ${ultrasoundVerified ? 'Decoded' : scanning && !serverTokenAttendance ? 'Listening…' : 'Not decoded'}`}
                 </Text>
               </View>
             </View>
 
-            {liveTelemetry && (
+            {!markedFromDashboard && liveTelemetry && (
               <View style={s.telemetryBadge}>
                 <Text style={s.telemetryText}>
                   Microphone input: {liveTelemetry.micLevel || 0}%
