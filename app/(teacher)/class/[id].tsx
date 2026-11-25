@@ -1,4 +1,4 @@
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams, useFocusEffect, router } from 'expo-router';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View, Platform, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -56,15 +56,17 @@ export default function TeacherClass() {
     }
   }, [id, loadHistory]);
 
-  useEffect(() => {
+  // Refresh membership counts after returning from the approval screen.
+  useFocusEffect(useCallback(() => {
     const controller = new AbortController();
     void load(controller.signal);
-    return () => {
-      controller.abort();
-      startController.current?.abort();
-      stopTeacherBeacon();
-      radarRef.current?.stop();
-    };
+    return () => controller.abort();
+  }, [load]));
+
+  useEffect(() => () => {
+    startController.current?.abort();
+    stopTeacherBeacon();
+    radarRef.current?.stop();
   }, [load]);
 
   useEffect(() => {

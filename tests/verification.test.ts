@@ -116,3 +116,49 @@ test('Bluetooth switching off while sound is pending cancels scanning and releas
   await assert.rejects(pending, /switched off/);
   assert.equal(f.calls.posts.length, 0); assert.equal(f.calls.stoppedAudio, 1); assert.equal(f.calls.stoppedBle, 1);
 });
+
+
+test('BLE scanning stops immediately after acquisition while sound remains mandatory', async () => {
+  const f = fixture();
+  let finishSound!: (value: typeof sound) => void;
+  let receive!: (candidate: { token: string }) => void;
+  let scanReady!: () => void;
+  const ready = new Promise<void>(resolve => { scanReady = resolve; });
+  f.deps.startListening = () => ({ result: new Promise(resolve => { finishSound = resolve; }), stop: () => { f.calls.stoppedAudio++; } });
+  f.deps.startScan = async callback => {
+    receive = callback; scanReady();
+    return () => { f.calls.stoppedBle++; };
+  };
+  const pending = runVerification('class-A', f.deps, limits);
+  await ready;
+  await new Promise<void>(resolve => setImmediate(resolve));
+  receive({ token: '123456' });
+  assert.equal(f.calls.stoppedBle, 1);
+  assert.equal(f.calls.stoppedAudio, 0);
+  assert.equal(f.calls.posts.length, 0, 'BLE alone must not submit attendance');
+  finishSound(sound);
+  assert.equal((await pending).source, 'BLE_ACOUSTIC');
+  assert.equal(f.calls.stoppedBle, 1, 'cleanup must not run twice');
+});
+
+test('a token acquired before native scan setup finishes still stops scanning before sound completes', async () => {
+  const f = fixture();
+  let finishSound!: (value: typeof sound) => void;
+  let finishSetup!: (cleanup: () => void) => void;
+  let scanReady!: () => void;
+  const ready = new Promise<void>(resolve => { scanReady = resolve; });
+  f.deps.startListening = () => ({ result: new Promise(resolve => { finishSound = resolve; }), stop: () => { f.calls.stoppedAudio++; } });
+  f.deps.startScan = callback => {
+    callback({ token: '123456' }); scanReady();
+    return new Promise(resolve => { finishSetup = resolve; });
+  };
+  const pending = runVerification('class-A', f.deps, limits);
+  await ready;
+  finishSetup(() => { f.calls.stoppedBle++; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(f.calls.stoppedBle, 1);
+  assert.equal(f.calls.posts.length, 0);
+  finishSound(sound);
+  assert.equal((await pending).source, 'BLE_ACOUSTIC');
+  assert.equal(f.calls.stoppedBle, 1);
+});

@@ -6,7 +6,7 @@ Android-focused Expo 57 / React Native application. The mobile app and the compa
 
 1. Bluetooth and microphone permissions are required. Bluetooth must be enabled before a microphone or BLE scan starts and remain enabled during verification.
 2. The student must be an accepted member of an active attendance session.
-3. The app prefers a real teacher BLE token, waiting up to six seconds while the acoustic receiver runs.
+3. The app prefers a real teacher BLE token, waiting up to six seconds while the acoustic receiver runs. Once a token is acquired, the BLE scanner stops immediately; Bluetooth remains enabled and monitored while sound verification completes.
 4. A complete, CRC-checked acoustic packet is mandatory on every path.
 5. When BLE retrieval fails, the app submits the active server session ID with the decoded acoustic value. This is explicitly shown as **acoustic/server-session fallback**, never as BLE verification.
 6. The backend validates the acoustic value against the selected session, class, and current/previous 20-second window before recording attendance. A client boolean is not proof.
@@ -17,9 +17,10 @@ GPS coordinates and passkeys are not attendance factors in this mobile repositor
 
 - Binary up/down linear chirps from **18,200 to 20,200 Hz**; each symbol lasts 20ms.
 - Barker preamble, protocol version byte, **64-bit server-issued challenge**, CRC-16/CCITT, and a 100ms frame gap.
-- One packet is about **2.12 seconds**. It repeats during the short teacher attendance session; the student listens for up to 15 seconds.
+- One packet is about **2.12 seconds**. It repeats during the short teacher attendance session; the student listens for up to 15 seconds after microphone setup completes. Setup has a separate 10-second deadline.
 - The transmitter uses one PCM AudioBuffer source, avoiding overlapping oscillator/WAV outputs.
-- The receiver uses phase-independent matched correlation, frame synchronization, clock-drift tracking and CRC validation. A continuous high-frequency tone is insufficient.
+- The receiver mixes the chirp band to complex baseband, applies a sixth-order low-pass filter before resampling to 6 kHz, then uses phase-independent matched correlation, frame synchronization and clock-drift tracking. One weak preamble symbol is tolerated; a single missing payload symbol can be reconstructed only when the complete packet passes CRC. Confidently wrong bits and two missing payload symbols are rejected. A continuous high-frequency tone is insufficient.
+- Development diagnostics report actual microphone settings and signal activity. Listener results distinguish microphone setup, listening time and received audio duration; these are not calibrated acoustic measurements.
 - The shared codec runs in a generated WebView script on native devices, preferring AudioWorklet and using ScriptProcessor only for older WebViews. Generation avoids `Function.toString()` on Hermes bytecode.
 - Output stops when a challenge expires, the app backgrounds, the session closes, or the component unmounts. The owning teacher obtains new challenge values through authenticated polling.
 

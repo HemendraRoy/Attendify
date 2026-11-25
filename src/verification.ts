@@ -34,6 +34,11 @@ export async function runVerification(classId: string, deps: VerificationDepende
   let bluetoothMonitor: ReturnType<typeof setInterval> | undefined;
   let stopScan: (() => void) | undefined;
   let stopAudio: (() => void) | undefined;
+  const stopBle = () => {
+    const cleanup = stopScan;
+    stopScan = undefined;
+    try { cleanup?.(); } catch {}
+  };
   const aborted = new Promise<never>((_, reject) => {
     if (signal.aborted) reject(signal.reason);
     else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
@@ -71,10 +76,13 @@ export async function runVerification(classId: string, deps: VerificationDepende
     void deps.startScan(candidate => {
       if (signal.aborted || !acceptingBle || bleToken || !candidate.token) return;
       bleToken = candidate.token;
+      stopBle();
       progress('BLE_FOUND', 'BLE token received. A valid classroom sound packet is still required.');
       resolveBle();
     }).then(cleanup => {
-      if (signal.aborted) cleanup(); else stopScan = cleanup;
+      // A candidate can arrive before the native initializer returns its cleanup.
+      if (signal.aborted || bleToken || !acceptingBle) { try { cleanup(); } catch {} }
+      else stopScan = cleanup;
     }).catch(() => resolveBle());
     const preferred = Promise.race([arrived, new Promise<void>(resolve => {
       preferenceTimer = setTimeout(resolve, options.blePreferenceMs ?? 6_000);
@@ -88,7 +96,7 @@ export async function runVerification(classId: string, deps: VerificationDepende
     const [, acoustic] = await bounded(Promise.all([preferred, sound]));
     if (!await bounded(deps.bluetoothEnabled())) throw new Error('Bluetooth was switched off. Turn it on and scan again.');
     acceptingBle = false;
-    stopScan?.(); stopScan = undefined;
+    stopBle();
     const source: VerificationSource = bleToken ? 'BLE_ACOUSTIC' : 'ACOUSTIC_FALLBACK';
     if (!bleToken) progress('ACOUSTIC_FALLBACK', 'No BLE token received. Using the active server session and decoded sound packet.', true);
     progress('SUBMITTING', 'The server is checking the sound challenge and recording attendance…', true);
@@ -104,7 +112,7 @@ export async function runVerification(classId: string, deps: VerificationDepende
     if (bluetoothMonitor) clearInterval(bluetoothMonitor);
     options.signal?.removeEventListener('abort', abort);
     controller.abort(new Error('Attendance verification finished'));
-    try { stopScan?.(); } catch {}
+    stopBle();
     try { stopAudio?.(); } catch {}
   }
 }

@@ -1,5 +1,6 @@
-import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState, useRef } from 'react';
+import { registerDevMenuItems } from 'expo-dev-client';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View, ScrollView, Platform, PermissionsAndroid, AppState } from 'react-native';
 import { api } from '@/api';
 import { verifyAndMarkAttendance } from '@/attendance';
@@ -7,6 +8,37 @@ import { stopStudentScan } from '@/ble';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UltrasoundRadar } from '@/UltrasoundRadar';
 import { DEFAULT_ULTRASOUND, type UltrasoundDetectionResult, type RadarTelemetry } from '@/ultrasound';
+
+type DeveloperAttendanceAction = (classId: string, controller: AbortController) => Promise<void>;
+
+function useAttendanceDevMenu(classId: string | undefined, runDeveloperAttendance: DeveloperAttendanceAction) {
+  useFocusEffect(useCallback(() => {
+    if (!__DEV__ || Platform.OS === 'web' || !classId) return;
+
+    const controller = new AbortController();
+    let fetching = false;
+    void registerDevMenuItems([{
+      name: 'X',
+      shouldCollapse: true,
+      callback: async () => {
+        if (fetching || controller.signal.aborted) return;
+        fetching = true;
+        try {
+          await runDeveloperAttendance(classId, controller);
+        } catch (error) {
+          if (!controller.signal.aborted) console.warn('[STUDENT][DEV] Developer attendance failed:', error);
+        } finally {
+          fetching = false;
+        }
+      },
+    }]).catch(error => console.warn('Could not register attendance dev menu item', error));
+
+    return () => {
+      controller.abort();
+      void registerDevMenuItems([]).catch(error => console.warn('Could not clear attendance dev menu item', error));
+    };
+  }, [classId, runDeveloperAttendance]));
+}
 
 export default function StudentClass() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -21,6 +53,7 @@ export default function StudentClass() {
   const audioRunRef = useRef(0);
   const scanController = useRef<AbortController | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [serverTokenAttendance, setServerTokenAttendance] = useState(false);
 
   // Microphone Diagnostic Test state
   const [testingMic, setTestingMic] = useState(false);
@@ -116,6 +149,7 @@ export default function StudentClass() {
     setBleDetected(false);
     setUltrasoundVerified(false);
     setIsSuccess(false);
+    setServerTokenAttendance(false);
     setLiveTelemetry(null);
     setStatusMessage('Checking Bluetooth and permissions…');
     try {
@@ -153,6 +187,58 @@ export default function StudentClass() {
     }
   };
 
+  const runDeveloperAttendance = useCallback(async (classId: string, controller: AbortController) => {
+    if (scanController.current || controller.signal.aborted) return;
+    scanController.current = controller;
+    setTestingMic(false);
+    setListening(false);
+    setAudioRun(++audioRunRef.current);
+    setScanning(true);
+    setBleDetected(false);
+    setUltrasoundVerified(false);
+    setIsSuccess(false);
+    setServerTokenAttendance(true);
+    setLiveTelemetry(null);
+    setStatusMessage('Verifying classroom presence…');
+
+    try {
+      const code = await api.getDevAttendanceCode(classId, controller.signal);
+      if (controller.signal.aborted) return;
+      setStatusMessage('The server is checking the sound challenge and recording attendance…');
+      const result = await api.markAttendance({
+        classId,
+        sessionId: code.sessionId,
+        bleToken: code.bleToken,
+        acousticToken: code.acoustic.token,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      const usedBle = result.verificationMethod === 'BLE_ACOUSTIC';
+      const completionMessage = usedBle
+        ? 'Attendance recorded using BLE and the acoustic challenge.'
+        : 'Attendance recorded using the acoustic challenge and server-session fallback.';
+      const confirmationMessage = usedBle
+        ? 'The server verified the BLE token and current classroom sound challenge.'
+        : 'The server verified the classroom sound challenge using session fallback. No BLE token was received.';
+      setBleDetected(usedBle);
+      setUltrasoundVerified(true);
+      setIsSuccess(true);
+      setStatusMessage(completionMessage);
+      Alert.alert('Attendance recorded', confirmationMessage);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error ? error.message : 'Attendance verification failed';
+        setStatusMessage(message);
+        Alert.alert('Attendance verification', message);
+      }
+    } finally {
+      if (scanController.current === controller) scanController.current = null;
+      setListening(false);
+      setScanning(false);
+    }
+  }, []);
+
+  useAttendanceDevMenu(data?.id === id ? id : undefined, runDeveloperAttendance);
+
   if (!data) {
     return (
       <SafeAreaView style={s.container}>
@@ -176,7 +262,11 @@ export default function StudentClass() {
           disabled={scanning}
         >
           <Text style={s.buttonText}>
-            {scanning ? 'Verifying Classroom Presence…' : isSuccess ? '✓ Attendance Recorded' : 'Scan & Mark Attendance'}
+            {scanning
+              ? 'Verifying Classroom Presence…'
+              : isSuccess
+                ? '✓ Attendance Recorded'
+                : 'Scan & Mark Attendance'}
           </Text>
         </Pressable>
 
@@ -237,21 +327,27 @@ export default function StudentClass() {
         {/* Verification Status Card */}
         {(scanning || statusMessage.length > 0) && (
           <View style={[s.statusCard, isSuccess && s.statusCardSuccess]}>
-            <Text style={s.statusTitle}>{isSuccess ? 'Verification Complete' : 'Verification Telemetry'}</Text>
+            <Text style={s.statusTitle}>
+              {isSuccess ? 'Verification Complete' : 'Verification Telemetry'}
+            </Text>
             <Text style={s.statusMsg}>{statusMessage}</Text>
 
             <View style={s.checksList}>
               <View style={s.checkRow}>
-                <Text style={s.checkIcon}>{bleDetected ? '🟢' : scanning ? '⏳' : '⚪'}</Text>
+                <Text style={s.checkIcon}>
+                  {bleDetected ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
+                </Text>
                 <Text style={[s.checkLabel, bleDetected && s.checkLabelActive]}>
-                  BLE Token: {bleDetected ? 'Received' : scanning ? 'Searching…' : 'Not received'}
+                  {`BLE Token: ${bleDetected ? 'Received' : scanning && !serverTokenAttendance ? 'Searching…' : 'Not received'}`}
                 </Text>
               </View>
 
               <View style={s.checkRow}>
-                <Text style={s.checkIcon}>{ultrasoundVerified ? '🟢' : scanning ? '⏳' : '⚪'}</Text>
+                <Text style={s.checkIcon}>
+                  {ultrasoundVerified ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
+                </Text>
                 <Text style={[s.checkLabel, ultrasoundVerified && s.checkLabelActive]}>
-                  Sound Packet: {ultrasoundVerified ? 'Decoded' : scanning ? 'Listening…' : 'Not decoded'}
+                  {`Sound Packet: ${ultrasoundVerified ? 'Decoded' : scanning && !serverTokenAttendance ? 'Listening…' : 'Not decoded'}`}
                 </Text>
               </View>
             </View>

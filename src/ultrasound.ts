@@ -9,11 +9,14 @@ export type UltrasoundDetectionResult = {
   protocol?: 'chirp-v1';
   quality?: number;
   micLevel?: number;
+  recoveredPayloadSymbols?: number;
+  timings?: { setupMs: number; listeningMs: number; audioSeconds: number; totalMs: number };
   reason?: 'DETECTED' | 'ACOUSTIC_SIGNAL_NOT_DETECTED' | 'MIC_PERMISSION_DENIED' | 'NOT_SUPPORTED' | 'CANCELLED' | 'ERROR';
   details?: string;
 };
 export type RadarTelemetry = { micLevel: number; quality?: number };
 export type RadarOptions = {
+  diagnostics?: boolean;
   mode: 'TEACHER_EMITTER' | 'STUDENT_LISTENER';
   timeoutMs: number;
   broadcast?: AcousticBroadcast | null;

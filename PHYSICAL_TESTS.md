@@ -1,6 +1,6 @@
 # Physical qualification before a presentation
 
-Status: NOT RUN. No physical phones were attached during implementation. Synthetic signals cannot establish classroom coverage or outside-room rejection.
+Status: PARTIAL BENCH TESTS ONLY. Phone-to-laptop reception and attendance in both Motorola/Redmi directions have been observed, with intermittent acoustic failures. The updated receiver and timing fixes still require physical retesting. Classroom coverage and outside-room rejection remain unqualified. See `/home/puneet/Projects/attendify/WORK_REPORT.md` for dated observations; synthetic tests cannot establish these properties.
 
 ## Preparation
 
@@ -34,6 +34,14 @@ Perform at least 20 check-ins per important inside/outside position across phone
 | Teacher ends session / session expires | No further acceptance |
 | Background or leave student screen | Capture is cancelled and microphone indicator disappears |
 | Server unreachable / slow | Clear failure; no local claim of attendance success |
+
+## Receiver-fix comparison
+
+- Reload Metro on both development clients and reload the laptop diagnostic page after this change. No native APK rebuild is required for these JavaScript changes.
+- Hold distance (start at 1 metre), orientation and media volume constant. Run repeated microphone diagnostics before attendance submissions, so duplicate-attendance behaviour cannot hide a receiver failure.
+- Repeat with Motorola transmitting and Redmi receiving, then reverse roles. Record every result, setup/listening times, phone settings and diagnostics; do not count only successful retries.
+- Start a fresh teacher attendance session for each actual check-in trial. Confirm the returned server verification method separately from local packet decoding.
+- Keep muted-transmitter, stopped-session and outside-closed-door negative controls. Improved receiver sensitivity may increase leakage reception, so the prior outside-room assumption must be tested again.
 
 ## Acceptance decision
 

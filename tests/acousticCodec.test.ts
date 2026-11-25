@@ -96,3 +96,92 @@ test('truncated packets and broadband noise never decode', () => {
   for (let i = 0; i < noise.length; i++) { seed = (1664525 * seed + 1013904223) >>> 0; noise[i] = (seed / 0x100000000 - 0.5) * 0.1; }
   assert.deepEqual(decoded(48_000, noise), []);
 });
+
+
+// The old runtime used this single high-pass stage before the decoder.
+function legacyHighpass(input: Float32Array, rate: number) {
+  const w = 2 * Math.PI * 17000 / rate, alpha = Math.sin(w) / 1.4, a0 = 1 + alpha;
+  const b0 = (1 + Math.cos(w)) / 2 / a0, b1 = -(1 + Math.cos(w)) / a0;
+  const a1 = -2 * Math.cos(w) / a0, a2 = (1 - alpha) / a0;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  return input.map(x => {
+    const y = b0 * x + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1; x1 = x; y2 = y1; y1 = y;
+    return y;
+  });
+}
+for (const rate of [44100, 48000]) {
+  test(`weak packets survive the out-of-band interference fixture at ${rate} Hz`, () => {
+    const token = 'a17f023bc40d95e6';
+    const codec = createAcousticCodec(rate);
+    const pcm = join(new Float32Array(1373), codec.encode(token, 0.0004), new Float32Array(4096));
+    const tones = [[300, 0.1], [1200, 0.05], [3200, 0.03], [4800, 0.015], [6400, 0.007], [8600, 0.004], [12000, 0.002], [15000, 0.001]];
+    for (let i = 0; i < pcm.length; i++) {
+      for (const [hz, amplitude] of tones) pcm[i] += amplitude * Math.sin(2 * Math.PI * hz * i / rate);
+    }
+    assert.deepEqual(decoded(rate, pcm), [token], "raw microphone samples");
+    assert.deepEqual(decoded(rate, legacyHighpass(pcm, rate)), [token], "legacy high-pass samples");
+  });
+}
+
+test('one erased payload symbol can be reconstructed using CRC without changing the packet format', () => {
+  const codec = createAcousticCodec(48000), token = '0123456789abcdef';
+  const pcm = codec.encode(token);
+  pcm.fill(0, 40 * codec.symbolSamples, 41 * codec.symbolSamples);
+  assert.deepEqual(decoded(48000, join(pcm, new Float32Array(4096))), [token]);
+});
+
+test('two erased payload symbols are rejected instead of guessed', () => {
+  const codec = createAcousticCodec(48000), pcm = codec.encode('0123456789abcdef');
+  pcm.fill(0, 40 * codec.symbolSamples, 42 * codec.symbolSamples);
+  assert.deepEqual(decoded(48000, join(pcm, new Float32Array(4096))), []);
+});
+
+test('an interrupted teacher packet does not prevent synchronization with a new challenge', () => {
+  const codec = createAcousticCodec(48000);
+  const partial = codec.encode('0123456789abcdef').slice(0, codec.symbolSamples * 45);
+  const next = codec.encode('a17f023bc40d95e6');
+  assert.deepEqual(decoded(48000, join(partial, next, new Float32Array(4096))), ['a17f023bc40d95e6']);
+});
+
+test('reset clears partial-frame and receive-filter state', () => {
+  const codec = createAcousticCodec(44100), output: string[] = [];
+  const decoder = codec.createDecoder(token => output.push(token));
+  decoder.push(codec.encode('0123456789abcdef').slice(0, 24000));
+  decoder.reset();
+  const pcm = join(new Float32Array(911), codec.encode('a17f023bc40d95e6'), new Float32Array(4096));
+  for (let i = 0; i < pcm.length; i += 4096) decoder.push(pcm.slice(i, i + 4096));
+  assert.deepEqual(output, ['a17f023bc40d95e6']);
+});
+
+
+for (const rate of [88200, 96000]) {
+  test(`receiver supports high-rate ${rate} Hz capture without changing the transmitted frame`, () => {
+    const codec = createAcousticCodec(rate);
+    assert.deepEqual(decoded(rate, join(new Float32Array(701), codec.encode('a17f023bc40d95e6'), new Float32Array(8192))), ['a17f023bc40d95e6']);
+  });
+}
+
+test('one weak preamble symbol does not discard an otherwise intact packet', () => {
+  const codec = createAcousticCodec(48000), pcm = codec.encode('0123456789abcdef');
+  pcm.fill(0, 6 * codec.symbolSamples, 7 * codec.symbolSamples);
+  assert.deepEqual(decoded(48000, join(pcm, new Float32Array(4096))), ['0123456789abcdef']);
+});
+
+test('a confidently wrong preamble symbol is rejected', () => {
+  const codec = createAcousticCodec(48000), pcm = codec.encode('0123456789abcdef');
+  pcm.set(pcm.slice(0, codec.symbolSamples), 6 * codec.symbolSamples);
+  assert.deepEqual(decoded(48000, join(pcm, new Float32Array(4096))), []);
+});
+
+for (const erased of [20, 100]) {
+  test(`version/CRC edge erasure at symbol ${erased} is recovered and reported`, () => {
+    const codec = createAcousticCodec(48000), pcm = codec.encode('0123456789abcdef');
+    pcm.fill(0, erased * codec.symbolSamples, (erased + 1) * codec.symbolSamples);
+    const output: Array<{ token: string; recovered?: number }> = [];
+    const decoder = codec.createDecoder((token, _quality, recovered) => output.push({ token, recovered }));
+    const input = join(pcm, new Float32Array(4096));
+    for (let i = 0; i < input.length; i += 4096) decoder.push(input.slice(i, i + 4096));
+    assert.deepEqual(output, [{ token: '0123456789abcdef', recovered: 1 }]);
+  });
+}

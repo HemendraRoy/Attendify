@@ -77,13 +77,15 @@ async function main() {
         const originalWorklet = window.AudioWorkletNode;
         if (${legacy}) window.AudioWorkletNode = undefined;
         let stop;
+        const diagnostics = [];
         try {
           const result = await new Promise(resolve => {
-            stop = window.__attendifyStart({ mode: 'STUDENT_LISTENER', timeoutMs: 12000 }, event => {
+            stop = window.__attendifyStart({ mode: 'STUDENT_LISTENER', timeoutMs: 12000, diagnostics: true }, event => {
+              if (event.type === 'RADAR_DIAGNOSTICS') diagnostics.push(event);
               if (event.type === 'LISTENER_RESULT') resolve(event);
             });
           });
-          return { ...result, tracksStopped: destination.stream.getTracks().every(track => track.readyState === 'ended') };
+          return { ...result, diagnostics, tracksStopped: destination.stream.getTracks().every(track => track.readyState === 'ended') };
         } finally {
           stop && stop(); player.stop(); await ctx.close();
           navigator.mediaDevices.getUserMedia = oldGetMedia; window.AudioWorkletNode = originalWorklet;
@@ -92,8 +94,36 @@ async function main() {
       assert.equal(result.verified, true, JSON.stringify(result));
       assert.equal(result.decodedToken, 'a17f023bc40d95e6');
       assert.equal(result.tracksStopped, true);
+      const capture = result.diagnostics.find(event => event.stage === 'capture');
+      assert.equal(capture.contextSampleRate, 48000);
+      assert.equal(capture.processor, legacy ? 'ScriptProcessor' : 'AudioWorklet');
+      assert.ok(result.diagnostics.some(event => event.stage === 'signal' && Number.isFinite(event.bandPowerDb)));
+      assert.ok(result.diagnostics.some(event => event.stage === 'signal' && event.bandFraction > 0.5 && event.bandPeakHz >= 18200 && event.bandPeakHz <= 20200), 'Known synthetic chirps must appear in the reported frequency band');
       console.log(`PASS: generated WebView runtime decoded a synthetic MediaStream through ${legacy ? 'ScriptProcessor fallback' : 'AudioWorklet'} and released its tracks.`);
     }
+    const delayed = await evaluate(`(async () => {
+      const ctx = new AudioContext({ sampleRate: 48000 }); await ctx.resume();
+      const expected = 'a17f023bc40d95e6';
+      const pcm = window.testCodec(ctx.sampleRate).encode(expected);
+      const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate); buffer.getChannelData(0).set(pcm);
+      const player = ctx.createBufferSource(); player.buffer = buffer; player.loop = true;
+      const destination = ctx.createMediaStreamDestination(); player.connect(destination); player.start();
+      const old = navigator.mediaDevices.getUserMedia;
+      navigator.mediaDevices.getUserMedia = async () => { await new Promise(resolve => setTimeout(resolve, 4000)); return destination.stream; };
+      let stop;
+      try {
+        const result = await new Promise(resolve => {
+          stop = window.__attendifyStart({ mode: 'STUDENT_LISTENER', timeoutMs: 4500 }, event => { if (event.type === 'LISTENER_RESULT') resolve(event); });
+        });
+        return { ...result, tracksStopped: destination.stream.getTracks().every(track => track.readyState === 'ended') };
+      } finally { stop && stop(); player.stop(); await ctx.close(); navigator.mediaDevices.getUserMedia = old; }
+    })()`);
+    assert.equal(delayed.verified, true, JSON.stringify(delayed));
+    assert.equal(delayed.decodedToken, 'a17f023bc40d95e6');
+    assert.equal(delayed.tracksStopped, true);
+    assert.ok(delayed.timings.setupMs >= 3500);
+    assert.ok(delayed.timings.listeningMs <= 5000);
+    console.log('PASS: microphone setup delay does not consume the acoustic listening window.');
     const denied = await evaluate(`(async () => {
       const old = navigator.mediaDevices.getUserMedia;
       navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('Synthetic permission denial', 'NotAllowedError'); };

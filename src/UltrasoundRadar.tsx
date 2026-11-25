@@ -23,12 +23,14 @@ export const UltrasoundRadar = forwardRef<UltrasoundRadarRef, UltrasoundRadarPro
   const latest = useRef(callbacks);
   useLayoutEffect(() => { latest.current = callbacks; });
   const { protocol, token, validUntil } = broadcast || {};
-  const options = useMemo(() => ({ mode, timeoutMs: config.timeoutMs,
+  const options = useMemo(() => ({ mode, timeoutMs: config.timeoutMs, diagnostics: __DEV__,
     broadcast: protocol && token && validUntil ? { protocol, token, validUntil } : null
   }), [mode, config.timeoutMs, protocol, token, validUntil]);
   const source = useMemo(() => ({ html: buildRadarHtml(options), baseUrl: 'https://localhost' }), [options]);
   const receive = useCallback((event: RadarEvent) => {
-    if (event.type === 'LISTENER_RESULT') latest.current.onDetectionResult?.(event as unknown as UltrasoundDetectionResult);
+    if (event.type === 'RADAR_DIAGNOSTICS') {
+      if (__DEV__) console.info('[ACOUSTIC][DIAGNOSTICS]', event);
+    } else if (event.type === 'LISTENER_RESULT') latest.current.onDetectionResult?.(event as unknown as UltrasoundDetectionResult);
     else if (event.type === 'RADAR_TELEMETRY') latest.current.onTelemetry?.(event as unknown as RadarTelemetry);
     else if (event.type === 'RADAR_STATUS') latest.current.onStatusChange?.(String(event.status), event.details as string | undefined);
   }, []);

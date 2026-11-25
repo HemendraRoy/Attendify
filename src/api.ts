@@ -129,6 +129,9 @@ export const api = {
       expiresAt?: string;
     }>(`/attendance/classes/${classId}/active`, { signal }),
 
+  getDevAttendanceCode: (classId: string, signal?: AbortSignal) =>
+    request<{ bleToken: string; sessionId: string; acoustic: AcousticBroadcast }>(`/attendance/classes/${encodeURIComponent(classId)}/dev-code`, { signal }),
+
   markAttendance: (submission: AcousticSubmission, signal?: AbortSignal) =>
     request<{ attendance: AttendanceRow; verificationMethod: VerificationSource; message: string }>('/attendance/mark', {
       method: 'POST',
