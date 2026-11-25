@@ -1,12 +1,44 @@
-import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState, useRef } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View, ScrollView, Platform, PermissionsAndroid } from 'react-native';
+import { registerDevMenuItems } from 'expo-dev-client';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View, ScrollView, Platform, PermissionsAndroid, AppState } from 'react-native';
 import { api } from '@/api';
 import { verifyAndMarkAttendance } from '@/attendance';
 import { stopStudentScan } from '@/ble';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UltrasoundRadar } from '@/UltrasoundRadar';
-import { DEFAULT_ULTRASOUND, type UltrasoundDetectionResult } from '@/ultrasound';
+import { DEFAULT_ULTRASOUND, type UltrasoundDetectionResult, type RadarTelemetry } from '@/ultrasound';
+
+type DeveloperAttendanceAction = (classId: string, controller: AbortController) => Promise<void>;
+
+function useAttendanceDevMenu(classId: string | undefined, runDeveloperAttendance: DeveloperAttendanceAction) {
+  useFocusEffect(useCallback(() => {
+    if (!__DEV__ || Platform.OS === 'web' || !classId) return;
+
+    const controller = new AbortController();
+    let fetching = false;
+    void registerDevMenuItems([{
+      name: 'X',
+      shouldCollapse: true,
+      callback: async () => {
+        if (fetching || controller.signal.aborted) return;
+        fetching = true;
+        try {
+          await runDeveloperAttendance(classId, controller);
+        } catch (error) {
+          if (!controller.signal.aborted) console.warn('[STUDENT][DEV] Developer attendance failed:', error);
+        } finally {
+          fetching = false;
+        }
+      },
+    }]).catch(error => console.warn('Could not register attendance dev menu item', error));
+
+    return () => {
+      controller.abort();
+      void registerDevMenuItems([]).catch(error => console.warn('Could not clear attendance dev menu item', error));
+    };
+  }, [classId, runDeveloperAttendance]));
+}
 
 export default function StudentClass() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -15,8 +47,13 @@ export default function StudentClass() {
   const [statusMessage, setStatusMessage] = useState('');
   const [bleDetected, setBleDetected] = useState(false);
   const [ultrasoundVerified, setUltrasoundVerified] = useState(false);
-  const [liveTelemetry, setLiveTelemetry] = useState<{ frequency: number; power: number; snr: number; micLevel?: number } | null>(null);
+  const [liveTelemetry, setLiveTelemetry] = useState<RadarTelemetry | null>(null);
+  const [listening, setListening] = useState(false);
+  const [audioRun, setAudioRun] = useState(0);
+  const audioRunRef = useRef(0);
+  const scanController = useRef<AbortController | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [serverTokenAttendance, setServerTokenAttendance] = useState(false);
 
   // Microphone Diagnostic Test state
   const [testingMic, setTestingMic] = useState(false);
@@ -29,22 +66,28 @@ export default function StudentClass() {
   const ultrasoundResolverRef = useRef<((res: UltrasoundDetectionResult) => void) | null>(null);
 
   useEffect(() => {
-    api.getClass(id!).then((r) => setData(r.class)).catch((e) => Alert.alert('Error', e.message));
+    const controller = new AbortController();
+    api.getClass(id!, controller.signal).then(r => { if (!controller.signal.aborted) setData(r.class); })
+      .catch(e => { if (!controller.signal.aborted) Alert.alert('Error', e.message); });
     return () => {
+      controller.abort();
+      scanController.current?.abort();
       stopStudentScan();
     };
   }, [id]);
 
   const handleUltrasoundResult = (result: UltrasoundDetectionResult) => {
     console.log('[STUDENT][ULTRASOUND] Result received:', result);
-    if (result.verified) {
+    if (result.verified && result.protocol === 'chirp-v1' && result.decodedToken) {
       setUltrasoundVerified(true);
       setDetectedCarrier(true);
-      setMicStatusText('🎉 Classroom sound carrier detected!');
+      setMicStatusText('A complete sound packet was decoded.');
     } else {
       if (result.reason === 'MIC_PERMISSION_DENIED' || result.reason === 'NOT_SUPPORTED') {
         setMicErrorDetails(result.details || 'Microphone access denied or unavailable');
         setMicStatusText('🔴 Microphone access error');
+      } else {
+        setMicStatusText(result.details || 'No complete classroom sound packet received.');
       }
     }
 
@@ -77,66 +120,124 @@ export default function StudentClass() {
       setDetectedCarrier(false);
       setMicErrorDetails(null);
       setMicStatusText('Opening microphone…');
+      setAudioRun(++audioRunRef.current);
       setTestingMic(true);
     } catch (e: any) {
       Alert.alert('Microphone Test Error', e?.message || 'Could not start test');
     }
   };
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'background') {
+        scanController.current?.abort();
+        setTestingMic(false);
+        setListening(false);
+        setScanning(false);
+        setStatusMessage('Scan cancelled. Keep the app open while checking in.');
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
   const scan = async () => {
-    // If mic test is running, stop it first
-    if (testingMic) {
-      setTestingMic(false);
-    }
-
+    if (scanController.current) return;
+    const controller = new AbortController();
+    scanController.current = controller;
+    setTestingMic(false);
+    setScanning(true);
+    setBleDetected(false);
+    setUltrasoundVerified(false);
+    setIsSuccess(false);
+    setServerTokenAttendance(false);
+    setLiveTelemetry(null);
+    setStatusMessage('Checking Bluetooth and permissions…');
     try {
-      if (Platform.OS === 'android') {
-        const audioRes = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
-        if (audioRes !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert('Microphone Access Required', 'Please grant microphone access so classroom proximity detection can operate.');
-          return;
-        }
-      }
-      setScanning(true);
-      setBleDetected(false);
-      setUltrasoundVerified(false);
-      setIsSuccess(false);
-      setLiveTelemetry(null);
-      setStatusMessage('Initializing scan & classroom proximity radar…');
-
-      // Create a promise for ultrasound detection that resolves when the radar component detects the tone
-      const ultrasoundPromise = new Promise<UltrasoundDetectionResult>((resolve) => {
-        ultrasoundResolverRef.current = resolve;
-      });
-
-      const result = await verifyAndMarkAttendance(id!, ultrasoundPromise, (progress) => {
+      const result = await verifyAndMarkAttendance(id!, () => {
+        const result = new Promise<UltrasoundDetectionResult>(resolve => { ultrasoundResolverRef.current = resolve; });
+        setAudioRun(++audioRunRef.current);
+        setListening(true);
+        return { result, stop: () => {
+          audioRunRef.current++;
+          if (!controller.signal.aborted) setListening(false);
+          ultrasoundResolverRef.current?.({ verified: false, reason: 'CANCELLED' });
+          ultrasoundResolverRef.current = null;
+        } };
+      }, { signal: controller.signal, onProgress: progress => {
         setStatusMessage(progress.message);
-        if (progress.bleFound !== undefined) setBleDetected(progress.bleFound);
-        if (progress.ultrasoundVerified !== undefined) setUltrasoundVerified(progress.ultrasoundVerified);
-      });
-
-      if (result.marked) {
+        setBleDetected(progress.bleFound);
+        setUltrasoundVerified(progress.ultrasoundVerified);
+      } });
+      if (!controller.signal.aborted && result.marked) {
         setIsSuccess(true);
-        setStatusMessage('Attendance marked successfully!');
-        Alert.alert(
-          'Attendance Verified! 🎓',
-          'Your physical presence inside the classroom has been confirmed via Bluetooth beacon and classroom proximity radar.'
-        );
-      } else {
-        Alert.alert(
-          'Attendance Notice',
-          result.message || 'No matching active teacher attendance session found. Make sure your teacher has started attendance.'
-        );
+        Alert.alert('Attendance recorded', result.source === 'BLE_ACOUSTIC'
+          ? 'The server verified the BLE token and current classroom sound challenge.'
+          : 'The server verified the classroom sound challenge using session fallback. No BLE token was received.');
       }
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : 'Scan failed';
-      setStatusMessage(`Verification error: ${errMsg}`);
-      Alert.alert('Attendance Verification', errMsg);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error ? error.message : 'Attendance verification failed';
+        setStatusMessage(message);
+        Alert.alert('Attendance verification', message);
+      }
     } finally {
       stopStudentScan();
-      setScanning(false);
+      if (!controller.signal.aborted) { setListening(false); setScanning(false); }
+      scanController.current = null;
     }
   };
+
+  const runDeveloperAttendance = useCallback(async (classId: string, controller: AbortController) => {
+    if (scanController.current || controller.signal.aborted) return;
+    scanController.current = controller;
+    setTestingMic(false);
+    setListening(false);
+    setAudioRun(++audioRunRef.current);
+    setScanning(true);
+    setBleDetected(false);
+    setUltrasoundVerified(false);
+    setIsSuccess(false);
+    setServerTokenAttendance(true);
+    setLiveTelemetry(null);
+    setStatusMessage('Verifying classroom presence…');
+
+    try {
+      const code = await api.getDevAttendanceCode(classId, controller.signal);
+      if (controller.signal.aborted) return;
+      setStatusMessage('The server is checking the sound challenge and recording attendance…');
+      const result = await api.markAttendance({
+        classId,
+        sessionId: code.sessionId,
+        bleToken: code.bleToken,
+        acousticToken: code.acoustic.token,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      const usedBle = result.verificationMethod === 'BLE_ACOUSTIC';
+      const completionMessage = usedBle
+        ? 'Attendance recorded using BLE and the acoustic challenge.'
+        : 'Attendance recorded using the acoustic challenge and server-session fallback.';
+      const confirmationMessage = usedBle
+        ? 'The server verified the BLE token and current classroom sound challenge.'
+        : 'The server verified the classroom sound challenge using session fallback. No BLE token was received.';
+      setBleDetected(usedBle);
+      setUltrasoundVerified(true);
+      setIsSuccess(true);
+      setStatusMessage(completionMessage);
+      Alert.alert('Attendance recorded', confirmationMessage);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        const message = error instanceof Error ? error.message : 'Attendance verification failed';
+        setStatusMessage(message);
+        Alert.alert('Attendance verification', message);
+      }
+    } finally {
+      if (scanController.current === controller) scanController.current = null;
+      setListening(false);
+      setScanning(false);
+    }
+  }, []);
+
+  useAttendanceDevMenu(data?.id === id ? id : undefined, runDeveloperAttendance);
 
   if (!data) {
     return (
@@ -152,7 +253,7 @@ export default function StudentClass() {
         <Text style={s.title}>{data.name}</Text>
         <Text style={s.muted}>Teacher: {data.teacher.name}</Text>
         <Text style={s.infoText}>
-          Dual-Factor Verification: Keep your phone out in the classroom. Ensure Bluetooth and Location (GPS) are turned ON in quick settings.
+          Keep Bluetooth enabled and allow microphone access. A complete classroom sound challenge is required; BLE token retrieval is preferred.
         </Text>
 
         <Pressable
@@ -161,7 +262,11 @@ export default function StudentClass() {
           disabled={scanning}
         >
           <Text style={s.buttonText}>
-            {scanning ? 'Verifying Classroom Presence…' : isSuccess ? '✓ Attendance Recorded' : 'Scan & Mark Attendance'}
+            {scanning
+              ? 'Verifying Classroom Presence…'
+              : isSuccess
+                ? '✓ Attendance Recorded'
+                : 'Scan & Mark Attendance'}
           </Text>
         </Pressable>
 
@@ -203,7 +308,7 @@ export default function StudentClass() {
               <Text style={s.diagToneIcon}>{detectedCarrier ? '🟢' : '⏳'}</Text>
               <Text style={[s.diagToneText, detectedCarrier && s.diagToneTextDetected]}>
                 {detectedCarrier
-                  ? 'Classroom acoustic carrier detected! Hardware link working.'
+                  ? 'Complete acoustic packet decoded. Server verification is still required to mark attendance.'
                   : 'Listening for teacher sound… (Ensure teacher attendance is started & volume up)'}
               </Text>
             </View>
@@ -222,21 +327,27 @@ export default function StudentClass() {
         {/* Verification Status Card */}
         {(scanning || statusMessage.length > 0) && (
           <View style={[s.statusCard, isSuccess && s.statusCardSuccess]}>
-            <Text style={s.statusTitle}>{isSuccess ? 'Verification Complete' : 'Verification Telemetry'}</Text>
+            <Text style={s.statusTitle}>
+              {isSuccess ? 'Verification Complete' : 'Verification Telemetry'}
+            </Text>
             <Text style={s.statusMsg}>{statusMessage}</Text>
 
             <View style={s.checksList}>
               <View style={s.checkRow}>
-                <Text style={s.checkIcon}>{bleDetected ? '🟢' : scanning ? '⏳' : '⚪'}</Text>
+                <Text style={s.checkIcon}>
+                  {bleDetected ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
+                </Text>
                 <Text style={[s.checkLabel, bleDetected && s.checkLabelActive]}>
-                  Retrieving Code: {bleDetected ? 'Code Acquired' : scanning ? 'Searching…' : 'Idle'}
+                  {`BLE Token: ${bleDetected ? 'Received' : scanning && !serverTokenAttendance ? 'Searching…' : 'Not received'}`}
                 </Text>
               </View>
 
               <View style={s.checkRow}>
-                <Text style={s.checkIcon}>{ultrasoundVerified ? '🟢' : scanning ? '⏳' : '⚪'}</Text>
+                <Text style={s.checkIcon}>
+                  {ultrasoundVerified ? '🟢' : scanning && !serverTokenAttendance ? '⏳' : '⚪'}
+                </Text>
                 <Text style={[s.checkLabel, ultrasoundVerified && s.checkLabelActive]}>
-                  Checking Proximity: {ultrasoundVerified ? 'Presence Confirmed' : scanning ? 'Verifying presence…' : 'Idle'}
+                  {`Sound Packet: ${ultrasoundVerified ? 'Decoded' : scanning && !serverTokenAttendance ? 'Listening…' : 'Not decoded'}`}
                 </Text>
               </View>
             </View>
@@ -244,7 +355,7 @@ export default function StudentClass() {
             {liveTelemetry && (
               <View style={s.telemetryBadge}>
                 <Text style={s.telemetryText}>
-                  Proximity Signal: SNR {liveTelemetry.snr}x · Signal Power: {liveTelemetry.power} · Mic: {liveTelemetry.micLevel || 0}%
+                  Microphone input: {liveTelemetry.micLevel || 0}%
                 </Text>
               </View>
             )}
@@ -254,16 +365,17 @@ export default function StudentClass() {
         <View style={s.antiProxyNotice}>
           <Text style={s.noticeTitle}>🛡️ Anti-Proxy Protection</Text>
           <Text style={s.noticeDesc}>
-            Students standing outside the room or in the hallway will be blocked. Ultrasound soundwaves physically cannot travel through classroom walls.
+            Check in from inside the classroom with your app open. If sound verification fails, retry or ask your teacher for help. Sound reception depends on the room and your phone.
           </Text>
         </View>
 
         {/* Headless Ultrasound Radar Listener */}
         <UltrasoundRadar
+          key={audioRun}
           mode="STUDENT_LISTENER"
           config={DEFAULT_ULTRASOUND}
-          active={scanning || testingMic}
-          onDetectionResult={handleUltrasoundResult}
+          active={listening || testingMic}
+          onDetectionResult={result => { if (audioRun === audioRunRef.current) handleUltrasoundResult(result); }}
           onTelemetry={(telemetry) => {
             setLiveTelemetry(telemetry);
             if (telemetry.micLevel !== undefined) {
@@ -274,7 +386,7 @@ export default function StudentClass() {
             if (status === 'LISTENING') {
               setMicStatusText('🟢 Microphone is listening');
             } else if (status === 'ERROR') {
-              setMicErrorDetails(details?.details || details?.error || 'Could not open microphone');
+              setMicErrorDetails(details || 'Could not open microphone');
               setMicStatusText('🔴 Microphone error');
             }
           }}

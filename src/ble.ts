@@ -102,36 +102,18 @@ export function parseTokenFromCharacteristicValue(raw: unknown): string {
   return decodedUtf8 || cleanHex;
 }
 
-export async function checkBleReady(): Promise<any> {
+export async function checkBleReady(role: 'student' | 'teacher' = 'student'): Promise<any> {
   if (Platform.OS === 'android') {
     const apiLevel = Number(Platform.Version);
-    console.log(`[BLE] Checking Android permissions (API level ${apiLevel})...`);
-
-    if (apiLevel >= 31) {
-      const perms = [
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-      ].filter(Boolean);
-
-      try {
-        const statuses = await PermissionsAndroid.requestMultiple(perms as any);
-        console.log('[BLE] Android 12+ runtime permissions status:', statuses);
-      } catch (err) {
-        console.warn('[BLE] PermissionsAndroid request error:', err);
-      }
-    } else {
-      try {
-        await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-        ]);
-      } catch (err) {
-        console.warn('[BLE] Location permission request error:', err);
+    const permissions = apiLevel >= 31
+      ? [PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+         role === 'teacher' ? PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE : PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN]
+      : role === 'student' ? [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] : [];
+    if (role === 'student') permissions.push(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    if (permissions.length) {
+      const statuses = await PermissionsAndroid.requestMultiple(permissions);
+      if (permissions.some(permission => statuses[permission] !== PermissionsAndroid.RESULTS.GRANTED)) {
+        throw new Error('Required Bluetooth or microphone permission was denied. Allow access in phone settings before scanning.');
       }
     }
   }
@@ -159,88 +141,53 @@ export async function checkBleReady(): Promise<any> {
   }
 }
 
-let activeTeacherListeners: (() => void)[] = [];
+let teacherGeneration = 0;
+let cancelTeacherStart: (() => void) | null = null;
 
-export async function startTeacherBeacon(
-  token: string,
-  config: BleConfig = DEFAULT_BLE
-): Promise<void> {
-  console.log('[BLE][TEACHER] Starting attendance beacon...');
-  console.log('[BLE][TEACHER] Service UUID:', config.serviceUUID);
-  console.log('[BLE][TEACHER] Characteristic UUID:', config.characteristicUUID);
-  console.log('[BLE][TEACHER] Token length:', token.length);
-
-  const capabilities = await checkBleReady();
-  if (capabilities && capabilities.supportsBlePeripheral === false) {
-    throw new Error('This device hardware does not support BLE Peripheral / Advertising mode.');
-  }
-
-  // Clear previous listeners if any
-  activeTeacherListeners.forEach(fn => { try { fn(); } catch {} });
-  activeTeacherListeners = [];
-
-  const startPromise = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      // If advertisingStartFailed did not fire within 3000ms, assume advertising is active
-      resolve();
-    }, 3000);
-
-    const removeStarted = addEventListener('advertisingStarted', () => {
-      clearTimeout(timer);
-      console.log('[BLE][TEACHER] ✅ Advertising started successfully');
-      resolve();
-    });
-
-    const removeFailed = addEventListener('advertisingStartFailed', (event: any) => {
-      clearTimeout(timer);
-      console.error('[BLE][TEACHER] ❌ Advertising failed to start:', JSON.stringify(event, null, 2));
-      reject(new Error(`Bluetooth beacon failed to start (Code: ${event?.errorCode ?? 'unknown'})`));
-    });
-
-    activeTeacherListeners.push(removeStarted, removeFailed);
-  });
-
+export async function startTeacherBeacon(token: string, config: BleConfig = DEFAULT_BLE): Promise<void> {
+  stopTeacherBeacon();
+  const generation = teacherGeneration;
+  const capabilities = await checkBleReady('teacher');
+  if (generation !== teacherGeneration) throw new Error('Bluetooth startup cancelled');
+  if (capabilities?.supportsBlePeripheral === false) throw new Error('This phone does not support BLE advertising. Acoustic fallback remains available.');
   try {
-    // 1. Configure GATT Service & Characteristic with token value
-    setServices([
-      {
-        uuid: config.serviceUUID,
-        characteristics: [
-          {
-            uuid: config.characteristicUUID,
-            properties: ['read'],
-            value: utf8ToHex(token),
-          },
-        ],
-      },
-    ]);
-
-    // 2. Start advertising with service UUID and localName
-    startAdvertising({
-      serviceUUIDs: [config.serviceUUID],
-      localName: `ATT_${token}`,
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const removers: (() => void)[] = [];
+      const timer = setTimeout(() => finish(new Error('Bluetooth advertising was not confirmed. Acoustic fallback remains available.')), 3000);
+      const cancel = () => finish(new Error('Bluetooth startup cancelled'));
+      function finish(error?: Error) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        removers.forEach(remove => remove());
+        if (cancelTeacherStart === cancel) cancelTeacherStart = null;
+        if (error) reject(error); else resolve();
+      }
+      cancelTeacherStart = cancel;
+      removers.push(addEventListener('advertisingStarted', () => finish()));
+      removers.push(addEventListener('advertisingStartFailed', event => finish(new Error(event.message || 'Bluetooth advertising failed'))));
+      try {
+        setServices([{ uuid: config.serviceUUID, characteristics: [{
+          uuid: config.characteristicUUID, properties: ['read'], value: utf8ToHex(token)
+        }] }]);
+        startAdvertising({ serviceUUIDs: [config.serviceUUID], localName: `ATT_${token}` });
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error('Bluetooth advertising failed'));
+      }
     });
-
-    console.log(`[BLE][TEACHER] ✅ Advertising request sent (ATT_${token}), waiting for confirmation...`);
-    await startPromise;
-    console.log('[BLE][TEACHER] 🚀 Teacher BLE Beacon is officially live');
   } catch (error) {
-    console.error('[BLE][TEACHER] ❌ Error in startTeacherBeacon:', error);
-    stopTeacherBeacon();
+    if (generation === teacherGeneration) stopTeacherBeacon();
     throw error;
   }
 }
 
 export function stopTeacherBeacon(): void {
-  try {
-    stopAdvertising();
-    console.log('[BLE][TEACHER] 🛑 Advertising stopped');
-  } catch {
-    /* already stopped */
-  }
-
-  activeTeacherListeners.forEach(fn => { try { fn(); } catch {} });
-  activeTeacherListeners = [];
+  teacherGeneration++;
+  const cancel = cancelTeacherStart;
+  cancelTeacherStart = null;
+  cancel?.();
+  try { stopAdvertising(); } catch { /* Already stopped. */ }
 }
 
 /**
@@ -276,6 +223,8 @@ class BleConnectionQueue {
 }
 
 const connectionQueue = new BleConnectionQueue();
+
+export const bluetoothEnabled = () => isBluetoothEnabled();
 
 export async function listenAndStartScan(
   onCandidate: (candidate: BleCandidate) => void | Promise<void>,
@@ -326,7 +275,7 @@ export async function listenAndStartScan(
 
     // 3. Check if token can be extracted from device name / localName
     if (!extractedToken) {
-      const directCodeMatch = rawName.match(/(?:ATT-|ATTEND_)([0-9a-zA-Z]{4,12})/i);
+      const directCodeMatch = rawName.match(/^(?:ATT_|ATT-|ATTEND_)([0-9a-zA-Z]{4,64})$/i);
       if (directCodeMatch) {
         extractedToken = directCodeMatch[1];
       }
@@ -335,7 +284,7 @@ export async function listenAndStartScan(
     // 4. Match by advertised serviceUUIDs
     const advertisedUUIDs: string[] = device.serviceUUIDs ?? [];
     const hasServiceUUID = advertisedUUIDs.some((uuid: string) => normalizeUuid(uuid) === targetServiceUUIDNorm);
-    const hasAttPrefix = /(?:ATT-|ATTEND_)[0-9a-zA-Z]+/i.test(rawName);
+    const hasAttPrefix = /^(?:ATT_|ATT-|ATTEND_)[0-9a-zA-Z]+$/i.test(rawName);
     const hasNameMatch = lowerName.includes('attendify') || hasAttPrefix;
     const hasServiceData = serviceData.some((entry: any) =>
       entry?.uuid && normalizeUuid(entry.uuid) === targetServiceUUIDNorm

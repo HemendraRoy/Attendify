@@ -1,24 +1,45 @@
+import type { AcousticBroadcast } from './ultrasound';
+import type { AcousticSubmission, VerificationSource } from './verification';
 import * as SecureStore from 'expo-secure-store';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://attendify-rebuild-backend-l9r4.onrender.com';
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (!API_URL) throw new Error('Set EXPO_PUBLIC_API_URL to the updated Attendify backend and rebuild the app.');
   const token = await SecureStore.getItemAsync('access_token');
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers ?? {}),
-    },
-  });
-
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.message ?? 'Request failed');
-  return body as T;
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (options.signal?.aborted) cancel();
+  else options.signal?.addEventListener('abort', cancel, { once: true });
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers ?? {}),
+      },
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message ?? 'Request failed');
+    }
+    return await response.json() as T;
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', cancel);
+  }
 }
 
 export const api = {
+  checkAcousticSupport: async (signal?: AbortSignal) => {
+    const capabilities = await request<{ acousticProtocol?: string }>('/health', { signal });
+    if (capabilities.acousticProtocol !== 'chirp-v1') {
+      throw new Error('The backend does not support chirp-v1. Update the app and backend together.');
+    }
+  },
   register: (payload: {
     name: string;
     email: string;
@@ -54,7 +75,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  getClass: (id: string) => request<{ class: ClassDetails }>(`/classes/${id}`),
+  getClass: (id: string, signal?: AbortSignal) => request<{ class: ClassDetails }>(`/classes/${id}`, { signal }),
 
   joinClass: (classId: string, joinCode?: string) =>
     request<{ membership: Membership }>('/classes/join', {
@@ -75,14 +96,16 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
 
-  startAttendance: (classId: string) =>
+  startAttendance: (classId: string, signal?: AbortSignal) =>
     request<{
       session: AttendanceSession;
       bleToken: string;
+      acoustic: AcousticBroadcast;
       code?: string;
       ble: BLEConfig;
     }>('/attendance/sessions/start', {
       method: 'POST',
+      signal,
       body: JSON.stringify({ classId }),
     }),
 
@@ -91,36 +114,36 @@ export const api = {
       method: 'POST',
     }),
 
-  currentAttendance: (classId: string) =>
+  currentAttendance: (classId: string, signal?: AbortSignal) =>
     request<{
       session: AttendanceSession | null;
       attendance: AttendanceRow[];
-    }>(`/attendance/classes/${classId}/current`),
+      acoustic: AcousticBroadcast | null;
+    }>(`/attendance/classes/${classId}/current`, { signal }),
 
-  getActiveSession: (classId: string) =>
+  getActiveSession: (classId: string, signal?: AbortSignal) =>
     request<{
       active: boolean;
       sessionId?: string;
       alreadyMarked?: boolean;
       expiresAt?: string;
-    }>(`/attendance/classes/${classId}/active`),
+    }>(`/attendance/classes/${classId}/active`, { signal }),
 
-  markAttendance: (
-    classId: string,
-    bleToken?: string,
-    ultrasoundVerified: boolean = false,
-    sessionId?: string
-  ) =>
-    request<{ attendance: AttendanceRow; message: string }>('/attendance/mark', {
+  getDevAttendanceCode: (classId: string, signal?: AbortSignal) =>
+    request<{ bleToken: string; sessionId: string; acoustic: AcousticBroadcast }>(`/attendance/classes/${encodeURIComponent(classId)}/dev-code`, { signal }),
+
+  markAttendance: (submission: AcousticSubmission, signal?: AbortSignal) =>
+    request<{ attendance: AttendanceRow; verificationMethod: VerificationSource; message: string }>('/attendance/mark', {
       method: 'POST',
-      body: JSON.stringify({ classId, bleToken, ultrasoundVerified, sessionId }),
+      signal,
+      body: JSON.stringify(submission),
     }),
 
   history: () =>
     request<{ attendance: AttendanceHistory[] }>('/attendance/student/history'),
 
-  classAttendanceHistory: (classId: string) =>
-    request<{ sessions: ClassSessionHistory[] }>(`/attendance/classes/${classId}/history`),
+  classAttendanceHistory: (classId: string, signal?: AbortSignal) =>
+    request<{ sessions: ClassSessionHistory[] }>(`/attendance/classes/${classId}/history`, { signal }),
 };
 
 export type ClassSessionStudentRecord = {
