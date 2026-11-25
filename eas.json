@@ -2,12 +2,18 @@
   "build": {
     "preview": {
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease -Pexpo.devmenu.configureInRelease=true"
+      },
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_ATTENDIFY_DEV_ATTENDANCE_X": "1"
       }
     },
     "production": {
       "android": {
-        "buildType": "app-bundle" 
+        "buildType": "app-bundle"
       }
     }
   }

@@ -53,6 +53,16 @@ npm run test:audio-browser  # Optional: requires Chromium/Brave; uses synthetic 
 
 For an Android debug APK, set ANDROID_HOME to your permanent SDK location and run `android/gradlew :app:assembleDebug` from the android directory. Debug builds require Metro; use an appropriate embedded-bundle build for a standalone presentation. Do not use the old checked-in APK as evidence of this branch's behaviour.
 
+## Cable-free internal APK for X testing
+
+The `preview` EAS profile builds an installable release-mode APK for internal testing. It includes X in the Expo developer menu, but the production profile does not. It bundles the app, so installing it does not require USB, ADB reverse, or Metro.
+
+Before building, set `EXPO_PUBLIC_API_URL` in the EAS `preview` environment to a network-reachable development backend. On that backend, use `NODE_ENV=development` and `ATTENDIFY_DEV_SESSION_CODE=1`. Keep this endpoint disabled on the production backend.
+
+```sh
+eas build --platform android --profile preview
+```
+
 ## Backend contract
 
 Teacher start/current-session responses include `acoustic: { protocol: "chirp-v1", token: "16 hexadecimal characters", validUntil: "ISO timestamp" }`. Only the owning teacher can read these responses.

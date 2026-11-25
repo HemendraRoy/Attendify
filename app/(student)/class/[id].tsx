@@ -13,7 +13,7 @@ type DeveloperAttendanceAction = (classId: string, controller: AbortController) 
 
 function useAttendanceDevMenu(classId: string | undefined, runDeveloperAttendance: DeveloperAttendanceAction) {
   useFocusEffect(useCallback(() => {
-    if (!__DEV__ || Platform.OS === 'web' || !classId) return;
+    if ((!__DEV__ && process.env.EXPO_PUBLIC_ATTENDIFY_DEV_ATTENDANCE_X !== '1') || Platform.OS === 'web' || !classId) return;
 
     const controller = new AbortController();
     let fetching = false;
