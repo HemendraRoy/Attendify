@@ -7,13 +7,14 @@ import { stopStudentScan } from '@/ble';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UltrasoundRadar } from '@/UltrasoundRadar';
 import { DEFAULT_ULTRASOUND, type UltrasoundDetectionResult } from '@/ultrasound';
-import { isBluetoothEnabled } from 'react-native-bluetooth-ble';
+import { isBluetoothEnabled, requestBluetoothPermission } from 'react-native-bluetooth-ble';
 
 export default function StudentClass() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [data, setData] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
   const [bluetoothEnabled, setBluetoothEnabled] = useState(false);
+  const [bluetoothPermission, setBluetoothPermission] = useState<boolean | null>(null);
   const [soundActive, setSoundActive] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [bleDetected, setBleDetected] = useState(false);
@@ -40,6 +41,33 @@ export default function StudentClass() {
 
   useEffect(() => {
     let mounted = true;
+    const requestAccess = async () => {
+      try {
+        const granted = await requestBluetoothPermission();
+        if (mounted) setBluetoothPermission(granted);
+        if (!granted && mounted) setBluetoothEnabled(false);
+      } catch {
+        if (mounted) { setBluetoothPermission(false); setBluetoothEnabled(false); }
+      }
+    };
+    void requestAccess();
+    return () => { mounted = false; };
+  }, []);
+
+  const requestBluetoothAccess = async () => {
+    try {
+      const granted = await requestBluetoothPermission();
+      setBluetoothPermission(granted);
+      setBluetoothEnabled(granted && await isBluetoothEnabled());
+    } catch {
+      setBluetoothPermission(false);
+      setBluetoothEnabled(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!bluetoothPermission) return;
+    let mounted = true;
     const checkBluetooth = async () => {
       try {
         const enabled = await isBluetoothEnabled();
@@ -51,7 +79,7 @@ export default function StudentClass() {
     void checkBluetooth();
     const interval = setInterval(() => void checkBluetooth(), 1000);
     return () => { mounted = false; clearInterval(interval); };
-  }, []);
+  }, [bluetoothPermission]);
 
   const handleUltrasoundResult = (result: UltrasoundDetectionResult) => {
     console.log('[STUDENT][ULTRASOUND] Result received:', result);
@@ -102,7 +130,7 @@ export default function StudentClass() {
   };
 
   const scan = async () => {
-    if (!bluetoothEnabled || !await isBluetoothEnabled()) {
+    if (!bluetoothPermission || !bluetoothEnabled || !await isBluetoothEnabled()) {
       setBluetoothEnabled(false);
       return;
     }
@@ -185,9 +213,15 @@ export default function StudentClass() {
           disabled={scanning || !bluetoothEnabled}
         >
           <Text style={s.buttonText}>
-            {scanning ? 'Verifying Classroom Presence…' : isSuccess ? '✓ Attendance Recorded' : bluetoothEnabled ? 'Scan & Mark Attendance' : 'Turn on Bluetooth to Scan'}
+            {scanning ? 'Verifying Classroom Presence…' : isSuccess ? '✓ Attendance Recorded' : bluetoothPermission === null ? 'Checking Bluetooth…' : !bluetoothPermission ? 'Allow Bluetooth Access' : bluetoothEnabled ? 'Scan & Mark Attendance' : 'Turn on Bluetooth to Scan'}
           </Text>
         </Pressable>
+
+        {bluetoothPermission === false && (
+          <Pressable style={s.testMicButton} onPress={requestBluetoothAccess}>
+            <Text style={s.testMicButtonText}>Grant Bluetooth Permission</Text>
+          </Pressable>
+        )}
 
         {/* Diagnostic Tool to check microphone hardware */}
         <Pressable
