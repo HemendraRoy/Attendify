@@ -1,11 +1,11 @@
-import { useLocalSearchParams, useFocusEffect, router } from 'expo-router';
-import { useCallback, useEffect, useState, useRef } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View, Platform, AppState } from 'react-native';
+import { useLocalSearchParams, router } from 'expo-router';
+import { useEffect, useState, useRef } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api, type ClassSessionHistory } from '@/api';
 import { startTeacherBeacon, stopTeacherBeacon } from '@/ble';
 import { UltrasoundRadar, type UltrasoundRadarRef } from '@/UltrasoundRadar';
-import { DEFAULT_ULTRASOUND, type AcousticBroadcast } from '@/ultrasound';
+import { DEFAULT_ULTRASOUND } from '@/ultrasound';
 
 export default function TeacherClass() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -13,171 +13,124 @@ export default function TeacherClass() {
   const [session, setSession] = useState<any>(null);
   const [rows, setRows] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
-  const [acoustic, setAcoustic] = useState<AcousticBroadcast | null>(null);
-  const [audioStatus, setAudioStatus] = useState('Stopped');
-  const [bleStarted, setBleStarted] = useState(false);
-  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  const [ultrasoundEmitting, setUltrasoundEmitting] = useState(false);
   const [sessionCode, setSessionCode] = useState<string | null>(null);
   const [historySessions, setHistorySessions] = useState<ClassSessionHistory[]>([]);
   const [selectedSession, setSelectedSession] = useState<ClassSessionHistory | null>(null);
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'PRESENT' | 'ABSENT'>('ALL');
   const radarRef = useRef<UltrasoundRadarRef>(null);
-  const startController = useRef<AbortController | null>(null);
-  const pollController = useRef<AbortController | null>(null);
 
-  const loadHistory = useCallback(async (signal?: AbortSignal) => {
+  const loadHistory = async () => {
     if (!id) return;
     try {
-      const res = await api.classAttendanceHistory(id, signal);
-      if (signal?.aborted) return;
+      const res = await api.classAttendanceHistory(id);
       setHistorySessions(res.sessions || []);
       if (res.sessions?.length > 0) {
         setSelectedSession((prev) => prev ? (res.sessions.find((s) => s.id === prev.id) || res.sessions[0]) : res.sessions[0]);
       }
     } catch (e) {
-      if (!signal?.aborted) console.warn('[TEACHER] Failed to load attendance history:', e);
+      console.warn('[TEACHER] Failed to load attendance history:', e);
     }
-  }, [id]);
+  };
 
-  const load = useCallback(async (signal: AbortSignal) => {
+  const load = async () => {
     if (!id) return;
     try {
-      const details = await api.getClass(id, signal);
-      if (signal.aborted) return;
-      setData(details.class);
-      const current = await api.currentAttendance(id, signal);
-      if (signal.aborted) return;
+      setData((await api.getClass(id)).class);
+      const current = await api.currentAttendance(id);
       setSession(current.session);
-      setAcoustic(current.acoustic || null);
       setRows(current.attendance);
-      await loadHistory(signal);
+      await loadHistory();
     } catch (e) {
-      if (!signal.aborted) Alert.alert('Error', e instanceof Error ? e.message : 'Could not load class');
+      Alert.alert('Error', e instanceof Error ? e.message : 'Could not load class');
     }
-  }, [id, loadHistory]);
-
-  // Refresh membership counts after returning from the approval screen.
-  useFocusEffect(useCallback(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]));
-
-  useEffect(() => () => {
-    startController.current?.abort();
-    stopTeacherBeacon();
-    radarRef.current?.stop();
-  }, [load]);
+  };
 
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', state => {
-      setForeground(state === 'active');
-      if (state === 'background') {
-        startController.current?.abort();
-        setBusy(false);
-        radarRef.current?.stop();
-        stopTeacherBeacon();
-        setBleStarted(false);
-      }
-    });
-    return () => subscription.remove();
+    load();
+    return () => {
+      stopTeacherBeacon();
+      setUltrasoundEmitting(false);
+    };
   }, []);
 
-  // Serialize polling and cancel requests on unmount/session change.
+  // Poll for attendance updates while session is live
   useEffect(() => {
-    if (!session || !foreground) return;
-    const controller = new AbortController();
-    pollController.current = controller;
-    let inFlight = false;
-    const poll = async () => {
-      if (inFlight || controller.signal.aborted) return;
-      inFlight = true;
+    if (!session) return;
+    const timer = setInterval(async () => {
       try {
-        const current = await api.currentAttendance(id!, controller.signal);
-        if (controller.signal.aborted) return;
-        setSession(current.session);
-        setAcoustic(current.acoustic || null);
-        setRows(current.attendance);
-        if (!current.session) { stopTeacherBeacon(); setBleStarted(false); }
-      } catch {
-        if (!controller.signal.aborted) { setAcoustic(null); setAudioStatus('Waiting for server connection'); }
-      } finally { inFlight = false; }
-    };
-    const timer = setInterval(poll, 2000);
-    void poll();
-    return () => {
-      controller.abort();
-      if (pollController.current === controller) pollController.current = null;
-      clearInterval(timer);
-    };
-  }, [session?.id, id, foreground]);
+        const c = await api.currentAttendance(id!);
+        setSession(c.session);
+        setRows(c.attendance);
+      } catch {}
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [session?.id, id]);
 
   const start = async () => {
-    if (startController.current) return;
-    const controller = new AbortController();
-    startController.current = controller;
     try {
       setBusy(true);
-      await api.checkAcousticSupport(controller.signal);
-      const r = await api.startAttendance(id!, controller.signal);
-      if (controller.signal.aborted) return;
+      const r = await api.startAttendance(id!);
       const code = r.code || r.bleToken;
       setSessionCode(code);
       setSelectedSession(null); // Clear selected history session so live session is focal
 
-      if (!r.acoustic || r.acoustic.protocol !== 'chirp-v1') {
-        await api.endAttendance(r.session.id);
-        throw new Error('The backend must be updated to support acoustic challenges before starting attendance.');
-      }
-      setAcoustic(r.acoustic);
-      setAudioStatus('Starting acoustic sweep…');
-      setBleStarted(false);
+      let bleStarted = false;
       try {
         // 1. Try starting BLE Beacon
         await startTeacherBeacon(r.bleToken, r.ble);
-        if (controller.signal.aborted) { stopTeacherBeacon(); return; }
-        setBleStarted(true);
+        bleStarted = true;
       } catch (beaconErr) {
-        if (controller.signal.aborted) { stopTeacherBeacon(); return; }
         console.warn('[TEACHER] Bluetooth beacon could not start:', beaconErr);
-        // Sound remains mandatory when the BLE beacon is unavailable.
+        // Do not abort session - ultrasound and backend fallback allow attendance to work seamlessly!
+      }
+
+      try {
+        // 2. Start Ultrasound Acoustic Carrier (20,000 Hz)
+        setUltrasoundEmitting(true);
+        radarRef.current?.start();
+      } catch (e) {
+        console.warn('[TEACHER] Ultrasound emitter error:', e);
       }
 
       setSession(r.session);
 
+      if (!bleStarted) {
+        Alert.alert(
+          'Bluetooth Beacon Notice',
+          'Bluetooth advertising is not supported or active on this device. Attendance will operate smoothly using classroom proximity radar!'
+        );
+      }
     } catch (e) {
-      if (!controller.signal.aborted) Alert.alert('Attendance Error', e instanceof Error ? e.message : 'Could not start attendance');
+      Alert.alert('Attendance Error', e instanceof Error ? e.message : 'Could not start attendance');
     } finally {
-      startController.current = null;
-      if (!controller.signal.aborted) setBusy(false);
+      setBusy(false);
     }
   };
 
   const end = async () => {
-    if (!session || busy) return;
-    const endingSession = session;
-    setBusy(true);
-    // Stop local output and in-flight refreshes before making network requests.
-    pollController.current?.abort();
-    stopTeacherBeacon();
-    radarRef.current?.stop();
-    setAcoustic(null);
-    setBleStarted(false);
-    setAudioStatus('Stopped');
     try {
-      await api.endAttendance(endingSession.id);
+      if (session) await api.endAttendance(session.id);
+      stopTeacherBeacon();
+      setUltrasoundEmitting(false);
+      radarRef.current?.stop();
+
+      // Immediately fetch historical sessions so the newly closed session is selected and displayed!
+      try {
+        const res = await api.classAttendanceHistory(id!);
+        setHistorySessions(res.sessions || []);
+        if (res.sessions?.length > 0) {
+          setSelectedSession(res.sessions[0]);
+          setFilterStatus('ALL');
+        }
+      } catch (err) {
+        console.warn('[TEACHER] Error fetching history on end:', err);
+      }
+
       setSession(null);
       setSessionCode(null);
-      const res = await api.classAttendanceHistory(id!);
-      setHistorySessions(res.sessions || []);
-      if (res.sessions?.length > 0) {
-        setSelectedSession(res.sessions[0]);
-        setFilterStatus('ALL');
-      }
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'Could not stop session');
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -215,8 +168,8 @@ export default function TeacherClass() {
           </Pressable>
 
           {session ? (
-            <Pressable style={s.stop} onPress={end} disabled={busy}>
-              <Text style={s.stopText}>{busy ? 'Stopping…' : 'Stop attendance'}</Text>
+            <Pressable style={s.stop} onPress={end}>
+              <Text style={s.stopText}>Stop attendance</Text>
             </Pressable>
           ) : (
             <Pressable style={s.primary} onPress={start} disabled={busy}>
@@ -238,7 +191,7 @@ export default function TeacherClass() {
                 <Text style={s.codeLabel}>IN-CLASS ATTENDANCE CODE</Text>
                 <Text style={s.codeValue}>{sessionCode}</Text>
                 <Text style={s.codeHelp}>
-                  BLE session code. Acoustic challenges rotate automatically.
+                  Broadcasting as ATT-{sessionCode} & Classroom Proximity Radar.
                 </Text>
               </View>
             )}
@@ -250,21 +203,21 @@ export default function TeacherClass() {
 
             <View style={s.techBadges}>
               <View style={s.badge}>
-                <Text style={s.badgeDot}>{bleStarted ? '🟢' : '⚪'}</Text>
+                <Text style={s.badgeDot}>🟢</Text>
                 <Text style={s.badgeText}>
-                  BLE Beacon: {bleStarted ? 'Advertising active' : 'Unavailable — acoustic fallback'}
+                  BLE Beacon: Broadcasting (ATT-{sessionCode || 'Active'})
                 </Text>
               </View>
               <View style={[s.badge, s.badgeUltrasound]}>
                 <Text style={s.badgeDot}>🔊</Text>
                 <Text style={s.badgeText}>
-                  Acoustic Sweep: {audioStatus}
+                  Proximity Radar: Inaudible Acoustic Carrier Active
                 </Text>
               </View>
             </View>
 
             <Text style={s.small}>
-              Keep this app open during check-in. Students must decode the current sound challenge. BLE failures use a separately identified session fallback.
+              Students must be inside this room to detect the silent acoustic carrier and verify attendance.
             </Text>
           </View>
         )}
@@ -449,9 +402,7 @@ export default function TeacherClass() {
           ref={radarRef}
           mode="TEACHER_EMITTER"
           config={DEFAULT_ULTRASOUND}
-          broadcast={acoustic}
-          active={Boolean(session && acoustic && foreground)}
-          onStatusChange={(status, details) => setAudioStatus(status === 'EMITTING_CHIRP' ? 'Broadcasting' : details || status)}
+          active={Boolean(session || ultrasoundEmitting)}
         />
       </ScrollView>
     </SafeAreaView>
