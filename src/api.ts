@@ -105,6 +105,12 @@ export const api = {
       expiresAt?: string;
     }>(`/attendance/classes/${classId}/active`),
 
+  verifyBleToken: (classId: string, bleToken: string) =>
+    request<{ sessionId: string }>('/attendance/verify-ble', {
+      method: 'POST',
+      body: JSON.stringify({ classId, bleToken }),
+    }),
+
   markAttendance: (
     classId: string,
     bleToken?: string,

@@ -7,11 +7,14 @@ import { stopStudentScan } from '@/ble';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { UltrasoundRadar } from '@/UltrasoundRadar';
 import { DEFAULT_ULTRASOUND, type UltrasoundDetectionResult } from '@/ultrasound';
+import { isBluetoothEnabled } from 'react-native-bluetooth-ble';
 
 export default function StudentClass() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [data, setData] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
+  const [bluetoothEnabled, setBluetoothEnabled] = useState(false);
+  const [soundActive, setSoundActive] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [bleDetected, setBleDetected] = useState(false);
   const [ultrasoundVerified, setUltrasoundVerified] = useState(false);
@@ -35,10 +38,25 @@ export default function StudentClass() {
     };
   }, [id]);
 
+  useEffect(() => {
+    let mounted = true;
+    const checkBluetooth = async () => {
+      try {
+        const enabled = await isBluetoothEnabled();
+        if (mounted) setBluetoothEnabled(enabled);
+      } catch {
+        if (mounted) setBluetoothEnabled(false);
+      }
+    };
+    void checkBluetooth();
+    const interval = setInterval(() => void checkBluetooth(), 1000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, []);
+
   const handleUltrasoundResult = (result: UltrasoundDetectionResult) => {
     console.log('[STUDENT][ULTRASOUND] Result received:', result);
     if (result.verified) {
-      setUltrasoundVerified(true);
+      if (ultrasoundResolverRef.current) setUltrasoundVerified(true);
       setDetectedCarrier(true);
       setMicStatusText('🎉 Classroom sound carrier detected!');
     } else {
@@ -84,6 +102,10 @@ export default function StudentClass() {
   };
 
   const scan = async () => {
+    if (!bluetoothEnabled || !await isBluetoothEnabled()) {
+      setBluetoothEnabled(false);
+      return;
+    }
     // If mic test is running, stop it first
     if (testingMic) {
       setTestingMic(false);
@@ -104,12 +126,12 @@ export default function StudentClass() {
       setLiveTelemetry(null);
       setStatusMessage('Initializing scan & classroom proximity radar…');
 
-      // Create a promise for ultrasound detection that resolves when the radar component detects the tone
-      const ultrasoundPromise = new Promise<UltrasoundDetectionResult>((resolve) => {
-        ultrasoundResolverRef.current = resolve;
-      });
-
-      const result = await verifyAndMarkAttendance(id!, ultrasoundPromise, (progress) => {
+      const result = await verifyAndMarkAttendance(id!, () => {
+        setSoundActive(true);
+        return new Promise<UltrasoundDetectionResult>((resolve) => {
+          ultrasoundResolverRef.current = resolve;
+        });
+      }, (progress) => {
         setStatusMessage(progress.message);
         if (progress.bleFound !== undefined) setBleDetected(progress.bleFound);
         if (progress.ultrasoundVerified !== undefined) setUltrasoundVerified(progress.ultrasoundVerified);
@@ -133,6 +155,8 @@ export default function StudentClass() {
       setStatusMessage(`Verification error: ${errMsg}`);
       Alert.alert('Attendance Verification', errMsg);
     } finally {
+      setSoundActive(false);
+      ultrasoundResolverRef.current = null;
       stopStudentScan();
       setScanning(false);
     }
@@ -156,12 +180,12 @@ export default function StudentClass() {
         </Text>
 
         <Pressable
-          style={[s.button, scanning && s.buttonScanning, isSuccess && s.buttonSuccess]}
+          style={[s.button, scanning && s.buttonScanning, isSuccess && s.buttonSuccess, !bluetoothEnabled && { opacity: 0.5 }]}
           onPress={scan}
-          disabled={scanning}
+          disabled={scanning || !bluetoothEnabled}
         >
           <Text style={s.buttonText}>
-            {scanning ? 'Verifying Classroom Presence…' : isSuccess ? '✓ Attendance Recorded' : 'Scan & Mark Attendance'}
+            {scanning ? 'Verifying Classroom Presence…' : isSuccess ? '✓ Attendance Recorded' : bluetoothEnabled ? 'Scan & Mark Attendance' : 'Turn on Bluetooth to Scan'}
           </Text>
         </Pressable>
 
@@ -262,7 +286,7 @@ export default function StudentClass() {
         <UltrasoundRadar
           mode="STUDENT_LISTENER"
           config={DEFAULT_ULTRASOUND}
-          active={scanning || testingMic}
+          active={soundActive || testingMic}
           onDetectionResult={handleUltrasoundResult}
           onTelemetry={(telemetry) => {
             setLiveTelemetry(telemetry);
